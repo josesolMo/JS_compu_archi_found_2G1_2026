@@ -1,7 +1,7 @@
 """
 main.py: Pruebas rápidas para ProcessorBase y derivados.
 """
-from core.processors_base import ProcessorBase, DecodedInstr
+from core.processor_base import ProcessorBase, DecodedInstr
 
 class DummyProcessor(ProcessorBase):
     """Implementación mínima para pruebas de ProcessorBase."""
