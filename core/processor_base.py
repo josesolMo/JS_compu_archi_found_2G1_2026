@@ -2,9 +2,11 @@
 Clase base abstracta para 10 instrucciones RV32I.
 """
 
+
 from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from typing import Optional
 import struct
 
 # ──────────────────────────────────────────────
