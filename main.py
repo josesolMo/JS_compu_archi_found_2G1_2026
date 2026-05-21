@@ -3,7 +3,7 @@ main.py: Pruebas rápidas para ProcessorBase y derivados.
 """
 
 from core.processor_base import ProcessorBase, DecodedInstr
-from core.processors import Unicycle, Multicycle
+from core.processors import Unicycle, Multicycle, PipelinedStall, PipelinedForwarding
 
 class DummyProcessor(ProcessorBase):
     """Implementación mínima para pruebas de ProcessorBase."""
@@ -48,6 +48,7 @@ def main():
     print(f"x3: {u.reg_read(3)} (esperado 92)")
     print(f"Ciclos: {u.stats.cycles}, Instrucciones: {u.stats.instructions}")
 
+
     # Pruebas con Multicycle
     print("\n== Prueba Multicycle ==")
     m = Multicycle()
@@ -58,6 +59,28 @@ def main():
     print(f"x2: {m.reg_read(2)} (esperado 50)")
     print(f"x3: {m.reg_read(3)} (esperado 92)")
     print(f"Ciclos: {m.stats.cycles}, Instrucciones: {m.stats.instructions}")
+
+    # Pruebas con PipelinedStall
+    print("\n== Prueba PipelinedStall ==")
+    ps = PipelinedStall()
+    ps.load_program(prog)
+    while not ps.halted:
+        ps.step()
+    print(f"x1: {ps.reg_read(1)} (esperado 42)")
+    print(f"x2: {ps.reg_read(2)} (esperado 50)")
+    print(f"x3: {ps.reg_read(3)} (esperado 92)")
+    print(f"Ciclos: {ps.stats.cycles}, Instrucciones: {ps.stats.instructions}, Stalls: {ps.stats.stalls}")
+
+    # Pruebas con PipelinedForwarding
+    print("\n== Prueba PipelinedForwarding ==")
+    pf = PipelinedForwarding()
+    pf.load_program(prog)
+    while not pf.halted:
+        pf.step()
+    print(f"x1: {pf.reg_read(1)} (esperado 42)")
+    print(f"x2: {pf.reg_read(2)} (esperado 50)")
+    print(f"x3: {pf.reg_read(3)} (esperado 92)")
+    print(f"Ciclos: {pf.stats.cycles}, Instrucciones: {pf.stats.instructions}, Forwards: {pf.stats.forwards}")
 
 if __name__ == "__main__":
     main()

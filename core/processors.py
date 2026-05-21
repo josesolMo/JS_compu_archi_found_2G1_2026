@@ -166,3 +166,280 @@ class Multicycle(ProcessorBase):
         cur = self._instr
         label = cur.mnemonic if cur else "—"
         return {s: (label if s == self._state else "—") for s in self.STATES}
+    
+# ════════════════════════════════════════════════════════════
+#  Registros de pipeline acoplados
+# ════════════════════════════════════════════════════════════
+@dataclass
+class IF_ID:
+    instr: Optional[DecodedInstr] = None
+    pc:    int = 0
+    valid: bool = False
+
+@dataclass
+class ID_EX:
+    instr:    Optional[DecodedInstr] = None
+    pc:       int = 0
+    rs1_val:  int = 0
+    rs2_val:  int = 0
+    imm:      int = 0
+    valid:    bool = False
+
+@dataclass
+class EX_MEM:
+    instr:    Optional[DecodedInstr] = None
+    alu_out:  int = 0
+    rs2_val:  int = 0
+    valid:    bool = False
+
+@dataclass
+class MEM_WB:
+    instr:    Optional[DecodedInstr] = None
+    alu_out:  int = 0
+    valid:    bool = False
+
+
+# ════════════════════════════════════════════════════════════
+#  3. PIPELINE CON STALLS
+# ════════════════════════════════════════════════════════════
+class PipelinedStall(ProcessorBase):
+    name = "Segmentado (Stalls)"
+
+    def __init__(self):
+        super().__init__()
+        self.if_id  = IF_ID()
+        self.id_ex  = ID_EX()
+        self.ex_mem = EX_MEM()
+        self.mem_wb = MEM_WB()
+
+    def reset(self):
+        super().reset()
+        self.if_id  = IF_ID()
+        self.id_ex  = ID_EX()
+        self.ex_mem = EX_MEM()
+        self.mem_wb = MEM_WB()
+
+    def step(self):
+        if self.halted: return
+        self.stats.cycles += 1
+
+        stall = self._detect_load_use_hazard()
+
+        # ── WB ──────────────────────────────────────────
+        if self.mem_wb.valid and self.mem_wb.instr:
+            op = self.mem_wb.instr.opcode
+            if op in (OP_LOAD, OP_IMM, OP_REG, OP_JAL, OP_JALR):
+                self.reg_write(self.mem_wb.instr.rd, self.mem_wb.alu_out)
+            self.pipeline_state["WB"] = self.mem_wb.instr
+            self.stats.instructions += 1
+        else:
+            self.pipeline_state["WB"] = None
+
+        # ── MEM ─────────────────────────────────────────
+        new_mem_wb = MEM_WB()
+        if self.ex_mem.valid and self.ex_mem.instr:
+            i = self.ex_mem.instr
+            out = self.ex_mem.alu_out
+            if i.opcode == OP_LOAD:
+                out = self.mem_read_word(out)
+            elif i.opcode == OP_STORE:
+                self.mem_write_word(out, self.ex_mem.rs2_val)
+            new_mem_wb = MEM_WB(instr=i, alu_out=out, valid=True)
+            self.pipeline_state["MEM"] = i
+        else:
+            self.pipeline_state["MEM"] = None
+        self.mem_wb = new_mem_wb
+
+        # ── EX ──────────────────────────────────────────
+        new_ex_mem = EX_MEM()
+        if not stall and self.id_ex.valid and self.id_ex.instr:
+            i = self.id_ex.instr
+            a, b = self.id_ex.rs1_val, self.id_ex.rs2_val
+            out = 0
+            if i.opcode in (OP_JAL, OP_JALR): out = (self.id_ex.pc + 4) & 0xFFFF_FFFF
+            elif i.opcode in (OP_LOAD, OP_STORE, OP_IMM): out = (a + self.id_ex.imm) & 0xFFFF_FFFF
+            elif i.opcode == OP_REG: out = self.alu_op(i.funct3, i.funct7, a, b)
+            
+            new_ex_mem = EX_MEM(instr=i, alu_out=out, rs2_val=b, valid=True)
+            self.pipeline_state["EX"] = i
+        else:
+            self.pipeline_state["EX"] = None
+        self.ex_mem = new_ex_mem
+
+        # ── ID ──────────────────────────────────────────
+        new_id_ex = ID_EX()
+        if not stall and self.if_id.valid and self.if_id.instr:
+            i = self.if_id.instr
+            new_id_ex = ID_EX(
+                instr=i, pc=self.if_id.pc,
+                rs1_val=self.reg_read(i.rs1), rs2_val=self.reg_read(i.rs2),
+                imm=i.imm, valid=True
+            )
+            self.pipeline_state["ID"] = i
+        elif stall:
+            new_id_ex = deepcopy(self.id_ex)
+            self.pipeline_state["ID"] = self.if_id.instr
+        else:
+            self.pipeline_state["ID"] = None
+        self.id_ex = new_id_ex
+
+        # ── IF ──────────────────────────────────────────
+        if not stall:
+            word = self.mem_read_word(self.pc)
+            if word == 0 and not any([self.if_id.valid, self.id_ex.valid, self.ex_mem.valid]):
+                self.halted = True
+                return
+            
+            instr = DecodedInstr.decode(word)
+            self.if_id = IF_ID(instr=instr, pc=self.pc, valid=(word != 0))
+            self.pipeline_state["IF"] = instr if word != 0 else None
+            if word != 0: 
+                self.pc = (self.pc + 4) & 0xFFFF_FFFF
+        else:
+            self.stats.stalls += 1
+            self.pipeline_state["IF"] = self.if_id.instr
+
+    def _detect_load_use_hazard(self) -> bool:
+        ex = self.id_ex
+        id_ = self.if_id
+        if not (ex.valid and ex.instr and id_.valid and id_.instr): return False
+        return ex.instr.opcode == OP_LOAD and (ex.instr.rd in (id_.instr.rs1, id_.instr.rs2)) and ex.instr.rd != 0
+
+    def get_stage_labels(self) -> dict[str, str]:
+        def lbl(instr): return instr.mnemonic if instr else "burbuja"
+        return {k: lbl(self.pipeline_state.get(k)) for k in self.pipeline_state}
+
+
+# ════════════════════════════════════════════════════════════
+#  4. PIPELINE CON FORWARDING
+# ════════════════════════════════════════════════════════════
+class PipelinedForwarding(ProcessorBase):
+    name = "Segmentado (Forwarding)"
+
+    def __init__(self):
+        super().__init__()
+        self.if_id  = IF_ID()
+        self.id_ex  = ID_EX()
+        self.ex_mem = EX_MEM()
+        self.mem_wb = MEM_WB()
+
+    def reset(self):
+        super().reset()
+        self.if_id  = IF_ID()
+        self.id_ex  = ID_EX()
+        self.ex_mem = EX_MEM()
+        self.mem_wb = MEM_WB()
+
+    def step(self):
+        if self.halted: return
+        self.stats.cycles += 1
+
+        stall = self._load_use_hazard()
+
+        # ── WB ──────────────────────────────────────────
+        if self.mem_wb.valid and self.mem_wb.instr:
+            op = self.mem_wb.instr.opcode
+            if op in (OP_LOAD, OP_IMM, OP_REG, OP_JAL, OP_JALR):
+                self.reg_write(self.mem_wb.instr.rd, self.mem_wb.alu_out)
+            self.pipeline_state["WB"] = self.mem_wb.instr
+            self.stats.instructions += 1
+        else:
+            self.pipeline_state["WB"] = None
+
+        # ── MEM ─────────────────────────────────────────
+        new_mem_wb = MEM_WB()
+        if self.ex_mem.valid and self.ex_mem.instr:
+            i = self.ex_mem.instr
+            out = self.ex_mem.alu_out
+            if i.opcode == OP_LOAD:
+                out = self.mem_read_word(out)
+            elif i.opcode == OP_STORE:
+                self.mem_write_word(out, self.ex_mem.rs2_val)
+            new_mem_wb = MEM_WB(instr=i, alu_out=out, valid=True)
+            self.pipeline_state["MEM"] = i
+        else:
+            self.pipeline_state["MEM"] = None
+        self.mem_wb = new_mem_wb
+
+        # ── EX con forwarding ───────────────────────────
+        new_ex_mem = EX_MEM()
+        if not stall and self.id_ex.valid and self.id_ex.instr:
+            i = self.id_ex.instr
+            a, b = self._resolve_forwards()
+            out = 0
+            if i.opcode in (OP_JAL, OP_JALR): out = (self.id_ex.pc + 4) & 0xFFFF_FFFF
+            elif i.opcode in (OP_LOAD, OP_STORE, OP_IMM): out = (a + self.id_ex.imm) & 0xFFFF_FFFF
+            elif i.opcode == OP_REG: out = self.alu_op(i.funct3, i.funct7, a, b)
+            
+            new_ex_mem = EX_MEM(instr=i, alu_out=out, rs2_val=b, valid=True)
+            self.pipeline_state["EX"] = i
+        else:
+            self.pipeline_state["EX"] = None
+        self.ex_mem = new_ex_mem
+
+        # ── ID ──────────────────────────────────────────
+        new_id_ex = ID_EX()
+        if not stall and self.if_id.valid and self.if_id.instr:
+            i = self.if_id.instr
+            new_id_ex = ID_EX(
+                instr=i, pc=self.if_id.pc,
+                rs1_val=self.reg_read(i.rs1), rs2_val=self.reg_read(i.rs2),
+                imm=i.imm, valid=True
+            )
+            self.pipeline_state["ID"] = i
+        elif stall:
+            new_id_ex = deepcopy(self.id_ex)
+            self.pipeline_state["ID"] = self.if_id.instr
+        else:
+            self.pipeline_state["ID"] = None
+        self.id_ex = new_id_ex
+
+        # ── IF ──────────────────────────────────────────
+        if not stall:
+            word = self.mem_read_word(self.pc)
+            if word == 0 and not any([self.if_id.valid, self.id_ex.valid, self.ex_mem.valid]):
+                self.halted = True
+                return
+            
+            instr = DecodedInstr.decode(word)
+            self.if_id = IF_ID(instr=instr, pc=self.pc, valid=(word != 0))
+            self.pipeline_state["IF"] = instr if word != 0 else None
+            if word != 0: 
+                self.pc = (self.pc + 4) & 0xFFFF_FFFF
+        else:
+            self.stats.stalls += 1
+            self.pipeline_state["IF"] = self.if_id.instr
+
+    def _load_use_hazard(self) -> bool:
+        ex = self.id_ex
+        id_ = self.if_id
+        if not (ex.valid and ex.instr and id_.valid and id_.instr): return False
+        return ex.instr.opcode == OP_LOAD and (ex.instr.rd in (id_.instr.rs1, id_.instr.rs2)) and ex.instr.rd != 0
+
+    def _resolve_forwards(self) -> tuple[int, int]:
+        a = self.id_ex.rs1_val
+        b = self.id_ex.rs2_val
+        rs1 = self.id_ex.instr.rs1
+        rs2 = self.id_ex.instr.rs2
+
+        # EX -> EX
+        if self.ex_mem.valid and self.ex_mem.instr and self.ex_mem.instr.rd != 0:
+            if self.ex_mem.instr.opcode not in (OP_STORE, OP_BRANCH):
+                rd = self.ex_mem.instr.rd
+                if rd == rs1: a = self.ex_mem.alu_out; self.stats.forwards += 1
+                if rd == rs2: b = self.ex_mem.alu_out; self.stats.forwards += 1
+
+        # MEM -> EX
+        if self.mem_wb.valid and self.mem_wb.instr and self.mem_wb.instr.rd != 0:
+            if self.mem_wb.instr.opcode not in (OP_STORE, OP_BRANCH):
+                rd = self.mem_wb.instr.rd
+                if rd == rs1 and not (self.ex_mem.valid and self.ex_mem.instr and self.ex_mem.instr.rd == rs1):
+                    a = self.mem_wb.alu_out; self.stats.forwards += 1
+                if rd == rs2 and not (self.ex_mem.valid and self.ex_mem.instr and self.ex_mem.instr.rd == rs2):
+                    b = self.mem_wb.alu_out; self.stats.forwards += 1
+
+        return a, b
+
+    def get_stage_labels(self) -> dict[str, str]:
+        def lbl(instr): return instr.mnemonic if instr else "burbuja"
+        return {k: lbl(self.pipeline_state.get(k)) for k in self.pipeline_state}
