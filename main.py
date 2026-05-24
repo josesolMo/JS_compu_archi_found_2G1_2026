@@ -1,86 +1,56 @@
 """
-main.py: Pruebas rápidas para ProcessorBase y derivados.
+main.py: Pruebas de los procesadores
 """
 
-from core.processor_base import ProcessorBase, DecodedInstr
 from core.processors import Unicycle, Multicycle, PipelinedStall, PipelinedForwarding
 
-class DummyProcessor(ProcessorBase):
-    """Implementación mínima para pruebas de ProcessorBase."""
-    def step(self):
-        self.halted = True  # No hace nada, solo para test
-    def get_stage_labels(self):
-        return {k: k for k in self.pipeline_state}
-
 def main():
+    # Estructura del programa:
+    # 0:  addi x1, x0, 10        # x1 = 10
+    # 4:  addi x2, x0, 20        # x2 = 20
+    # 8:  add  x3, x1, x2        # x3 = 30
+    # 12: sub  x4, x3, x1        # x4 = 20
+    # 16: and  x5, x3, x2        # x5 = 20
+    # 20: or   x6, x1, x2        # x6 = 30
+    # 24: sw   x6, 0(x0)         # mem[0] = 30
+    # 28: lw   x7, 0(x0)         # x7 = 30
+    # 32: beq  x7, x6, +8        # Salta a PC 40 (esquiva el jal)
+    # 36: jal  x8, +8            # Esto no se ejecuta si el beq es exitoso
+    # 40: addi x9, x0, 99        # x9 = 99 (Fin de la simulación)
 
-    print("== Prueba rápida ProcessorBase ==")
-    proc = DummyProcessor()
-    print(f"PC inicial: {proc.pc}")
-    print(f"Regs: {proc.regs}")
-    print(f"Memoria: {len(proc.memory)} bytes")
-    print(f"Stats: {proc.stats}")
-    proc.reg_write(1, 123)
-    print(f"Reg 1 tras escribir 123: {proc.reg_read(1)}")
-    proc.mem_write_word(0, 0xDEADBEEF)
-    print(f"Mem[0]: {hex(proc.mem_read_word(0))}")
-    instr = DecodedInstr.decode(0x00C58533)  # add x10, x11, x12
-    print(f"Decodificado: {instr}")
-    print(f"Mnemonic: {instr.mnemonic}")
-    proc.reset()
-    print(f"PC tras reset: {proc.pc}")
-    print(f"Regs tras reset: {proc.regs}")
-
-    # Pruebas con Unicycle
-    print("\n== Prueba Unicycle ==")
-    u = Unicycle()
-    # Programa: addi x1, x0, 42; addi x2, x1, 8; add x3, x1, x2
-    prog = [
-        0x02A00093,  # addi x1, x0, 42
-        0x00808113,  # addi x2, x1, 8
-        0x002081B3   # add x3, x1, x2
+    prog_all = [
+        0x00A00093,  # addi x1, x0, 10
+        0x01400113,  # addi x2, x0, 20
+        0x002081B3,  # add  x3, x1, x2
+        0x40118233,  # sub  x4, x3, x1  <-- Corregido el funct3
+        0x0021F2B3,  # and  x5, x3, x2  <-- Corregido el funct3
+        0x0020E333,  # or   x6, x1, x2  <-- Corregido el funct3
+        0x00602023,  # sw   x6, 0(x0)
+        0x00002383,  # lw   x7, 0(x0)
+        0x00638463,  # beq  x7, x6, +8  <-- Corregido para saltar al addi x9
+        0x0080046F,  # jal  x8, +8
+        0x06300493   # addi x9, x0, 99
     ]
-    u.load_program(prog)
-    while not u.halted:
-        u.step()
-    print(f"x1: {u.reg_read(1)} (esperado 42)")
-    print(f"x2: {u.reg_read(2)} (esperado 50)")
-    print(f"x3: {u.reg_read(3)} (esperado 92)")
-    print(f"Ciclos: {u.stats.cycles}, Instrucciones: {u.stats.instructions}")
 
+    procesadores = [
+        (Unicycle, "Unicycle"),
+        (Multicycle, "Multicycle"),
+        (PipelinedStall, "PipelinedStall"),
+        (PipelinedForwarding, "PipelinedForwarding")
+    ]
 
-    # Pruebas con Multicycle
-    print("\n== Prueba Multicycle ==")
-    m = Multicycle()
-    m.load_program(prog)
-    while not m.halted:
-        m.step()
-    print(f"x1: {m.reg_read(1)} (esperado 42)")
-    print(f"x2: {m.reg_read(2)} (esperado 50)")
-    print(f"x3: {m.reg_read(3)} (esperado 92)")
-    print(f"Ciclos: {m.stats.cycles}, Instrucciones: {m.stats.instructions}")
-
-    # Pruebas con PipelinedStall
-    print("\n== Prueba PipelinedStall ==")
-    ps = PipelinedStall()
-    ps.load_program(prog)
-    while not ps.halted:
-        ps.step()
-    print(f"x1: {ps.reg_read(1)} (esperado 42)")
-    print(f"x2: {ps.reg_read(2)} (esperado 50)")
-    print(f"x3: {ps.reg_read(3)} (esperado 92)")
-    print(f"Ciclos: {ps.stats.cycles}, Instrucciones: {ps.stats.instructions}, Stalls: {ps.stats.stalls}")
-
-    # Pruebas con PipelinedForwarding
-    print("\n== Prueba PipelinedForwarding ==")
-    pf = PipelinedForwarding()
-    pf.load_program(prog)
-    while not pf.halted:
-        pf.step()
-    print(f"x1: {pf.reg_read(1)} (esperado 42)")
-    print(f"x2: {pf.reg_read(2)} (esperado 50)")
-    print(f"x3: {pf.reg_read(3)} (esperado 92)")
-    print(f"Ciclos: {pf.stats.cycles}, Instrucciones: {pf.stats.instructions}, Forwards: {pf.stats.forwards}")
+    for proc_class, nombre in procesadores:
+        proc = proc_class()
+        proc.load_program(prog_all)
+        
+        while not proc.halted:
+            proc.step()
+            
+        print(f"\n== {nombre} (10 instrucciones) ==")
+        for i in range(1, 10):
+            print(f"x{i}: {proc.reg_read(i)}")
+        print(f"mem[0]: {proc.mem_read_word(0)}")
+        print(f"Ciclos: {proc.stats.cycles}, Instrucciones: {proc.stats.instructions}, Stalls: {getattr(proc.stats, 'stalls', 0)}, Forwards: {getattr(proc.stats, 'forwards', 0)}")
 
 if __name__ == "__main__":
     main()
