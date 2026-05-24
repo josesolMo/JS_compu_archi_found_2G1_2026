@@ -245,7 +245,7 @@ class PipelinedStall(ProcessorBase):
 
         # ── EX ──────────────────────────────────────────
         new_ex_mem = EX_MEM()
-        if not stall and self.id_ex.valid and self.id_ex.instr:
+        if self.id_ex.valid and self.id_ex.instr:
             i = self.id_ex.instr
             a, b = self.id_ex.rs1_val, self.id_ex.rs2_val
             out = 0
@@ -272,7 +272,9 @@ class PipelinedStall(ProcessorBase):
         new_id_ex = ID_EX()
         if flush:
             self.pipeline_state["ID"] = None
-        elif not stall and self.if_id.valid and self.if_id.instr:
+        elif stall:
+            self.pipeline_state["ID"] = self.if_id.instr
+        elif self.if_id.valid and self.if_id.instr:
             i = self.if_id.instr
             new_id_ex = ID_EX(
                 instr=i, pc=self.if_id.pc,
@@ -280,8 +282,6 @@ class PipelinedStall(ProcessorBase):
                 imm=i.imm, valid=True
             )
             self.pipeline_state["ID"] = i
-        elif stall:
-            self.pipeline_state["ID"] = self.if_id.instr
         else:
             self.pipeline_state["ID"] = None
 
@@ -294,7 +294,6 @@ class PipelinedStall(ProcessorBase):
         elif not stall:
             word = self.mem_read_word(self.pc)
             
-            # Chequeamos halt previniendo matar la instrucción que apenas entrará al WB
             if word == 0 and not any([self.if_id.valid, self.id_ex.valid, self.ex_mem.valid, new_mem_wb.valid]):
                 self.halted = True
                 return
@@ -391,7 +390,7 @@ class PipelinedForwarding(ProcessorBase):
 
         # ── EX con forwarding ───────────────────────────
         new_ex_mem = EX_MEM()
-        if not stall and self.id_ex.valid and self.id_ex.instr:
+        if self.id_ex.valid and self.id_ex.instr:
             i = self.id_ex.instr
             a, b = self._resolve_forwards()
             out = 0
@@ -418,7 +417,9 @@ class PipelinedForwarding(ProcessorBase):
         new_id_ex = ID_EX()
         if flush:
             self.pipeline_state["ID"] = None
-        elif not stall and self.if_id.valid and self.if_id.instr:
+        elif stall:
+            self.pipeline_state["ID"] = self.if_id.instr
+        elif self.if_id.valid and self.if_id.instr:
             i = self.if_id.instr
             new_id_ex = ID_EX(
                 instr=i, pc=self.if_id.pc,
@@ -426,8 +427,6 @@ class PipelinedForwarding(ProcessorBase):
                 imm=i.imm, valid=True
             )
             self.pipeline_state["ID"] = i
-        elif stall:
-            self.pipeline_state["ID"] = self.if_id.instr
         else:
             self.pipeline_state["ID"] = None
 
@@ -490,14 +489,14 @@ class PipelinedForwarding(ProcessorBase):
         rs1 = i.rs1 if uses_rs1 else 0
         rs2 = i.rs2 if uses_rs2 else 0
 
-        # Forwarding desde MEM (usando el estado viejo seguro self.ex_mem)
+        # Forwarding desde MEM
         if self.ex_mem.valid and self.ex_mem.instr and self.ex_mem.instr.rd != 0:
             if self.ex_mem.instr.opcode not in (OP_STORE, OP_BRANCH):
                 rd = self.ex_mem.instr.rd
                 if uses_rs1 and rd == rs1: a = self.ex_mem.alu_out; self.stats.forwards += 1
                 if uses_rs2 and rd == rs2: b = self.ex_mem.alu_out; self.stats.forwards += 1
 
-        # Forwarding desde WB (usando el estado viejo seguro self.mem_wb)
+        # Forwarding desde WB
         if self.mem_wb.valid and self.mem_wb.instr and self.mem_wb.instr.rd != 0:
             if self.mem_wb.instr.opcode not in (OP_STORE, OP_BRANCH):
                 rd = self.mem_wb.instr.rd
