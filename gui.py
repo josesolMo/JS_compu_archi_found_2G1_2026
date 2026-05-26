@@ -24,7 +24,7 @@ class SimuladorGUI(tk.Tk):
         left = ttk.Frame(self, padding=8)
         left.grid(row=0, column=0, sticky="ns")
 
-        self.frame_modo(left)
+        self.panel_ejecucion(left)
         self.frame_consola(left)
         self.frame_procesadores(left)
         self.frame_registros(left)
@@ -43,19 +43,30 @@ class SimuladorGUI(tk.Tk):
         self.frame_cpu(main, "Procesador 2", 1)
         self.frame_resultados(main)
 
-    def frame_modo(self, parent):
+    def panel_ejecucion(self, parent):
         frame = ttk.LabelFrame(parent, text="Modo de ejecución", padding=8)
         frame.pack(fill="x", pady=5)
 
-        combo = ttk.Combobox(frame, values=["Step by step", "Run"], width=18)
-        combo.set("Step by step")
+        combo = ttk.Combobox(frame, values=["Paso a Paso", "Automática", "Completa", "Detectar Hazard"], width=18)
+        combo.set("Paso a Paso")
         combo.grid(row=0, column=0, padx=4)
 
         ttk.Button(frame, text="RUN").grid(row=0, column=1, padx=4)
 
-        spin = ttk.Spinbox(frame, from_=1, to=1000, width=8)
-        spin.set("1 ms")
-        spin.grid(row=1, column=0, pady=6)
+        self.delay_ms = tk.IntVar(value=1)
+
+        spin = ttk.Spinbox(
+            frame,
+            from_=1,
+            to=1000,
+            increment=1,
+            textvariable=self.delay_ms,
+            width=8
+        )
+        
+        spin.grid(row=1, column=0, pady=6, padx=10, sticky="w")
+
+        ttk.Label(frame, text="ms").grid(row=1, column=0, padx=(80, 0), sticky="w")
 
     def frame_consola(self, parent):
         frame = ttk.LabelFrame(parent, text="Consola", padding=8)
