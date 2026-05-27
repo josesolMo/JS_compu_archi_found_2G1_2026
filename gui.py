@@ -27,7 +27,7 @@ class SimuladorGUI(tk.Tk):
         self.panel_ejecucion(left)
         self.panel_consola(left)
         self.panel_procesadores(left)
-        self.frame_registros(left)
+        self.panel_registros(left)
         self.frame_memoria(left)
 
     def panel_principal(self):
@@ -122,21 +122,67 @@ class SimuladorGUI(tk.Tk):
             ultimo = activos[-1]
             self.cpu_vars[ultimo].set(False)
 
-    def frame_registros(self, parent):
+    def panel_registros(self, parent):
+
         frame = ttk.LabelFrame(parent, text="Registros", padding=5)
-        frame.pack(fill="both", pady=5)
+        frame.pack(fill="both", expand=True, pady=5)
 
-        tabla = ttk.Treeview(frame, columns=("P1", "P2"), show="headings", height=8)
-        tabla.heading("P1", text="P1")
-        tabla.heading("P2", text="P2")
+        self.procesador_actual = tk.StringVar(value="P1")
 
-        tabla.column("P1", width=100)
-        tabla.column("P2", width=100)
+        # Barra superior
+        barra = ttk.Frame(frame)
+        barra.pack(fill="x", pady=(0, 5))
 
-        for i in range(8):
-            tabla.insert("", "end", values=(f"x{i}  0x00000000", "0x00000000"))
+        ttk.Radiobutton(
+            barra,
+            text="P1",
+            variable=self.procesador_actual,
+            value="P1"
+        ).pack(side="left", expand=True)
 
-        tabla.pack(fill="both")
+        ttk.Radiobutton(
+            barra,
+            text="P2",
+            variable=self.procesador_actual,
+            value="P2"
+        ).pack(side="left", expand=True)
+
+        # Contenedor tabla + scroll
+        contenedor = ttk.Frame(frame)
+        contenedor.pack(fill="both", expand=True)
+
+        tabla = ttk.Treeview(
+            contenedor,
+            columns=("registro", "valor"),
+            show="headings",
+            height=6
+        )
+
+        tabla.heading("registro", text="Registro")
+        tabla.heading("valor", text="Valor")
+
+        tabla.column("registro", width=70, anchor="center")
+        tabla.column("valor", width=140, anchor="center")
+
+        # Scroll vertical
+        scroll = ttk.Scrollbar(
+            contenedor,
+            orient="vertical",
+            command=tabla.yview
+        )
+
+        tabla.configure(yscrollcommand=scroll.set)
+
+        tabla.pack(side="left", fill="both", expand=True)
+        scroll.pack(side="right", fill="y")
+
+        # Registros vacíos
+        for i in range(32):
+            tabla.insert(
+                "",
+                "end",
+                values=(f"x{i}", "0x00000000")
+            )
 
     def frame_memoria(self, parent):
         frame = ttk.LabelFrame(parent, text="Memoria", padding=5)
