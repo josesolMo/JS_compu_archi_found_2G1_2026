@@ -34,46 +34,42 @@ class SimulationManager:
         if not self.p2.halted:
             self.p2.step()
 
-    def run_auto(self, delay_sec: float = 0.5, callback=None):
-        """Ejecuta la simulación automáticamente hasta que ambos terminen, con un retardo real."""
-        while not self.is_finished():
-            self.step()
-            if callback:
-                # callback puede ser usado en GUI para actualizar la pantalla
-                callback(self.get_full_state())
-            time.sleep(delay_sec)
-
-    def _get_active_memory(self, proc: ProcessorBase) -> Dict[int, int]:
+    def _get_memory_vector(self, proc: ProcessorBase) -> Dict[str, str]:
         """
-        Extrae la memoria desde la celda 0 hasta la última celda que no sea 0
-        Retorna un diccionario {direccion: valor_entero}
+        Genera el 'vector resultante' de memoria desde la dirección 0 
+        hasta la última celda que haya sido utilizada (distinta de 0).
         """
-        mem_dict = {}
+        mem_vector = {}
         last_active_addr = 0
         
-        # Encontrar la última dirección con datos
+        # Escanear para encontrar cuál es la última celda ocupada
         for addr in range(0, len(proc.memory), 4):
             val = struct.unpack_from("<I", proc.memory, addr)[0]
             if val != 0:
                 last_active_addr = addr
 
-        # Volcar datos desde 0 hasta el último activo
+        # Construir el vector desde 0 hasta ese límite
         for addr in range(0, last_active_addr + 4, 4):
-            mem_dict[addr] = struct.unpack_from("<I", proc.memory, addr)[0]
+            val = struct.unpack_from("<I", proc.memory, addr)[0]
+            addr_hex = f"0x{addr:08X}"
+            val_hex = f"0x{val:08X}"
+            mem_vector[addr_hex] = val_hex
             
-        return mem_dict
+        return mem_vector
 
     def _extract_proc_state(self, proc: ProcessorBase) -> Dict[str, Any]:
-        """Empaqueta todo el estado requerido de un procesador en un diccionario."""
+        """Empaqueta todo el estado del procesador para la GUI."""
+        registers_hex = [f"0x{reg & 0xFFFF_FFFF:08X}" for reg in proc.regs]
+        
         return {
             "name": proc.name,
             "halted": proc.halted,
             "cycle": proc.stats.cycles,
             "elapsed_time_ms": proc.stats.cycles * self.cycle_time_ms,
-            "pc": proc.pc,
-            "registers": list(proc.regs),
+            "pc": f"0x{proc.pc:08X}",
+            "registers": registers_hex,
             "pipeline_stages": proc.get_stage_labels(),
-            "memory": self._get_active_memory(proc),
+            "memory_vector": self._get_memory_vector(proc),
             "stats": {
                 "instructions": proc.stats.instructions,
                 "stalls": getattr(proc.stats, 'stalls', 0),
@@ -82,7 +78,7 @@ class SimulationManager:
         }
 
     def get_full_state(self) -> Dict[str, Any]:
-        """Devuelve el estado de ambos procesadores listos para ser dibujados en la GUI."""
+        """Devuelve el estado de ambos procesadores listo para la interfaz o terminal."""
         return {
             "processor_1": self._extract_proc_state(self.p1),
             "processor_2": self._extract_proc_state(self.p2),
