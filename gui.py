@@ -25,8 +25,8 @@ class SimuladorGUI(tk.Tk):
         left.grid(row=0, column=0, sticky="ns")
 
         self.panel_ejecucion(left)
-        self.frame_consola(left)
-        self.frame_procesadores(left)
+        self.panel_consola(left)
+        self.panel_procesadores(left)
         self.frame_registros(left)
         self.frame_memoria(left)
 
@@ -68,7 +68,7 @@ class SimuladorGUI(tk.Tk):
 
         ttk.Label(frame, text="ms").grid(row=1, column=0, padx=(80, 0), sticky="w")
 
-    def frame_consola(self, parent):
+    def panel_consola(self, parent):
         frame = ttk.LabelFrame(parent, text="Consola", padding=8)
         frame.pack(fill="x", pady=5)
 
@@ -82,9 +82,12 @@ class SimuladorGUI(tk.Tk):
         text.insert("end", "SW x5, 4(x2)\n")
         text.insert("end", "BEQ x1, x2, -2\n")
 
-    def frame_procesadores(self, parent):
+    def panel_procesadores(self, parent):
+
         frame = ttk.LabelFrame(parent, text="Procesadores", padding=8)
         frame.pack(fill="x", pady=5)
+
+        self.cpu_vars = {}
 
         opciones = [
             "Uniciclo",
@@ -94,7 +97,30 @@ class SimuladorGUI(tk.Tk):
         ]
 
         for op in opciones:
-            ttk.Checkbutton(frame, text=op).pack(anchor="w")
+
+            var = tk.BooleanVar(value=False)
+            self.cpu_vars[op] = var
+
+            chk = ttk.Checkbutton(
+                frame,
+                text=op,
+                variable=var,
+                command=self.limitar_seleccion
+            )
+
+            chk.pack(anchor="w", pady=2)
+    
+    def limitar_seleccion(self):
+
+        activos = [
+            op for op, var in self.cpu_vars.items()
+            if var.get()
+        ]
+
+        if len(activos) > 2:
+
+            ultimo = activos[-1]
+            self.cpu_vars[ultimo].set(False)
 
     def frame_registros(self, parent):
         frame = ttk.LabelFrame(parent, text="Registros", padding=5)
