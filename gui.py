@@ -19,6 +19,10 @@ class SimuladorGUI(tk.Tk):
         self.proc1_tipo = None
         self.proc2_tipo = None
         self.modo_var = tk.StringVar(value="Paso a Paso")
+        self.vista_p1 = tk.StringVar(value="Datapath")
+        self.vista_p2 = tk.StringVar(value="Datapath")
+        self.ventanas_mef = {}
+        self.frames_mef = {}
 
         self.proc_map = {
             "Uniciclo": Unicycle,
@@ -179,14 +183,17 @@ class SimuladorGUI(tk.Tk):
         if len(activos) >= 1:
             self.proc1_tipo = activos[0]
             estado_p1 = estado["processor_1"] if estado else None
+
             self.dibujar_por_tipo(self.area_p1, activos[0], estado_p1)
 
         if len(activos) >= 2:
             self.proc2_tipo = activos[1]
             estado_p2 = estado["processor_2"] if estado else None
+
             self.dibujar_por_tipo(self.area_p2, activos[1], estado_p2)
 
         self.actualizar_titulos_procesadores()
+        self.actualizar_selector_mef()
     
     def dibujar_por_tipo(self, frame, tipo, estado_proc=None):
 
@@ -351,24 +358,40 @@ class SimuladorGUI(tk.Tk):
 
     def frame_cpu(self, parent, titulo, fila):
         frame = ttk.LabelFrame(parent, text=titulo, padding=5)
+
         if titulo == "Procesador 1":
             self.frame_proc1 = frame
         else:
             self.frame_proc2 = frame
+
         frame.grid(row=fila, column=0, sticky="nsew", pady=5)
 
         frame.columnconfigure(0, weight=1)
-        frame.rowconfigure(1, weight=1)
+        frame.rowconfigure(2, weight=1)
 
+        # Barra opcional Datapath / MEF
+        barra_vista = ttk.Frame(frame)
+        barra_vista.grid(row=0, column=0, sticky="w", pady=(0, 3))
+
+        if titulo == "Procesador 1":
+            self.barra_vista_p1 = barra_vista
+            vista_var = self.vista_p1
+        else:
+            self.barra_vista_p2 = barra_vista
+            vista_var = self.vista_p2
+
+        # Tabla superior
         tabla = self.tabla_pipeline(frame)
+        tabla.grid(row=1, column=0, sticky="ew")
 
         if titulo == "Procesador 1":
             self.tabla_pipeline_p1 = tabla
         else:
             self.tabla_pipeline_p2 = tabla
 
+        # Área donde se dibuja datapath o MEF
         area = ttk.Frame(frame, height=220)
-        area.grid(row=1, column=0, sticky="nsew")
+        area.grid(row=2, column=0, sticky="nsew")
         area.grid_propagate(False)
 
         area.columnconfigure(0, weight=1)
@@ -384,15 +407,24 @@ class SimuladorGUI(tk.Tk):
         canvas = tk.Canvas(frame, bg="white", height=230)
 
         def bloque(x1, y1, x2, y2, texto, etapa=None):
-            fill = self.color_por_etapa(etapa, stages) if etapa else "white"
-            outline = self.borde_por_etapa(etapa, stages) if etapa else "black"
+            activo = etapa and stages.get(etapa) not in ("", "—", None)
+
+            if activo:
+                fill = "#fff3cd"      
+                outline = "#c97a00"   
+                width = 3
+            else:
+                fill = "white"
+                outline = "black"
+                width = 1
 
             canvas.create_rectangle(
                 x1, y1, x2, y2,
-                width=2 if etapa and stages.get(etapa) not in ("", "—", None) else 1,
+                width=width,
                 fill=fill,
                 outline=outline
             )
+
             canvas.create_text((x1+x2)//2, (y1+y2)//2, text=texto)
 
         def cable(x1, y1, x2, y2, dash=None):
@@ -486,15 +518,24 @@ class SimuladorGUI(tk.Tk):
         canvas = tk.Canvas(frame, bg="white", height=210)
 
         def bloque(x1, y1, x2, y2, texto, etapa=None):
-            fill = self.color_por_etapa(etapa, stages) if etapa else "white"
-            outline = self.borde_por_etapa(etapa, stages) if etapa else "black"
+            activo = etapa and stages.get(etapa) not in ("", "—", None)
+
+            if activo:
+                fill = "#fff3cd"     
+                outline = "#c97a00"  
+                width = 3
+            else:
+                fill = "white"
+                outline = "black"
+                width = 1
 
             canvas.create_rectangle(
                 x1, y1, x2, y2,
-                width=2 if etapa and stages.get(etapa) not in ("", "—", None) else 1,
+                width=width,
                 fill=fill,
                 outline=outline
             )
+
             canvas.create_text((x1+x2)//2, (y1+y2)//2, text=texto)
 
         def cable(x1, y1, x2, y2, dash=None):
@@ -593,7 +634,168 @@ class SimuladorGUI(tk.Tk):
         cable(610, 20, 132, 95, dash=(3, 3))
 
         return canvas
-        
+    
+    def dibujar_mef_multiciclo(self, frame, estado_proc=None):
+        stages = estado_proc["pipeline_stages"] if estado_proc else {}
+
+        estado_activo = None
+        for estado in ["IF", "ID", "EX", "MEM", "WB"]:
+            if stages.get(estado, "—") not in ("", "—", None):
+                estado_activo = estado
+                break
+
+        # Contenedor con scroll
+        contenedor = ttk.Frame(frame)
+        contenedor.pack(fill="both", expand=True)
+
+        scroll_x = ttk.Scrollbar(contenedor, orient="horizontal")
+        scroll_y = ttk.Scrollbar(contenedor, orient="vertical")
+
+        canvas = tk.Canvas(
+            contenedor,
+            bg="white",
+            width=900,
+            height=360,
+            xscrollcommand=scroll_x.set,
+            yscrollcommand=scroll_y.set
+        )
+
+        scroll_x.config(command=canvas.xview)
+        scroll_y.config(command=canvas.yview)
+
+        scroll_x.pack(side="bottom", fill="x")
+        scroll_y.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+
+        canvas.configure(scrollregion=(0, 0, 950, 760))
+
+        activos_visuales = {
+            "IF": ["S0"],
+            "ID": ["S1"],
+            "EX": ["S6", "S7", "S9"],
+            "MEM": ["S2", "S3", "S5"],
+            "WB": ["S4", "S8"],
+        }
+
+        estados_activos = activos_visuales.get(estado_activo, [])
+
+        estados = {
+            "S0": (180, 80,  "S0: Fetch"),
+            "S1": (420, 90,  "S1: Decode"),
+
+            "S2": (120, 250, "S2: MemAdr"),
+            "S6": (330, 250, "S6: ExecuteR"),
+            "S7": (540, 250, "S7: ExecuteI"),
+            "S9": (760, 250, "S9: Branch"),
+
+            "S3": (120, 430, "S3: MemRead"),
+            "S5": (330, 430, "S5: MemWrite"),
+            "S8": (540, 430, "S8: ALUWB"),
+
+            "S4": (120, 610, "S4: MemWB"),
+        }
+
+        r = 45
+
+        def centro(s):
+            return estados[s][0], estados[s][1]
+
+        def punto_borde(a, b):
+            import math
+
+            x1, y1 = centro(a)
+            x2, y2 = centro(b)
+
+            dx = x2 - x1
+            dy = y2 - y1
+            dist = math.sqrt(dx * dx + dy * dy)
+
+            if dist == 0:
+                return x1, y1, x2, y2
+
+            ux = dx / dist
+            uy = dy / dist
+
+            return (
+                x1 + ux * r,
+                y1 + uy * r,
+                x2 - ux * r,
+                y2 - uy * r
+            )
+
+        def cable(x1, y1, x2, y2, texto="", width=1.7):
+            canvas.create_line(
+                x1, y1, x2, y2,
+                width=width,
+                arrow="last",
+                arrowshape=(14, 18, 6)
+            )
+
+            if texto:
+                canvas.create_text(
+                    (x1 + x2) / 2,
+                    (y1 + y2) / 2 - 15,
+                    text=texto,
+                    font=("Arial", 9),
+                    justify="center"
+                )
+
+        def flecha(a, b, texto=""):
+            x1, y1, x2, y2 = punto_borde(a, b)
+            cable(x1, y1, x2, y2, texto=texto)
+
+        # Transiciones principales
+        flecha("S0", "S1")
+        flecha("S1", "S2", "Memory\nOp = 01")
+        flecha("S2", "S3", "LDR")
+        flecha("S2", "S4", "STR")
+        flecha("S3", "S5")
+        flecha("S1", "S6", "Data Reg")
+        flecha("S1", "S7", "Data Imm")
+        flecha("S1", "S9", "Branch")
+        flecha("S6", "S8")
+        flecha("S7", "S8")
+
+        # Retornos hacia Fetch
+        y_retorno = 690
+        x_retorno = 860
+
+        canvas.create_line(120, 610 + r, 120, y_retorno, width=1.5)
+        canvas.create_line(330, 430 + r, 330, y_retorno, width=1.5)
+        canvas.create_line(540, 430 + r, 540, y_retorno, width=1.5)
+        canvas.create_line(760, 250 + r, 760, y_retorno, width=1.5)
+
+        canvas.create_line(120, y_retorno, x_retorno, y_retorno, width=1.5)
+        canvas.create_line(x_retorno, y_retorno, x_retorno, 30, width=1.5)
+
+        cable(x_retorno, 30, 180, 30)
+
+        # Reset
+        canvas.create_text(55, 90, text="Reset", font=("Arial", 10))
+        cable(90, 90, 170 - r, 90)
+
+        # Estados
+        for clave, (x, y, texto) in estados.items():
+            activo = clave in estados_activos
+
+            canvas.create_oval(
+                x - r, y - r,
+                x + r, y + r,
+                fill="#ffe0b2" if activo else "white",
+                outline="#c97a00" if activo else "black",
+                width=4 if activo else 1
+            )
+
+            canvas.create_text(
+                x,
+                y,
+                text=texto,
+                font=("Arial", 10, "bold") if activo else ("Arial", 10),
+                justify="center"
+            )
+
+        return contenedor
+
     def dibujar_datapath_segmentado_stalls(self, frame, estado_proc=None):
         stages = estado_proc["pipeline_stages"] if estado_proc else {}
         canvas = tk.Canvas(frame, bg="white", height=210)
@@ -857,7 +1059,7 @@ class SimuladorGUI(tk.Tk):
         tabla.heading("MEM", text="MEM (amarillo)")
         tabla.heading("WB", text="WB (verde)")
 
-        tabla.grid(row=0, column=0, sticky="ew")
+        #tabla.grid(row=0, column=0, sticky="ew")
 
         tabla.insert("", "end", iid="estado", values=("", "", "", "", "", "", "", ""))
 
@@ -1025,11 +1227,12 @@ class SimuladorGUI(tk.Tk):
         p1 = estado["processor_1"]
         p2 = estado["processor_2"]
 
-        self.actualizar_tabla_pipeline(self.tabla_pipeline_p1, p1)
-        self.actualizar_tabla_pipeline(self.tabla_pipeline_p2, p2)
+        self.actualizar_tabla_pipeline(self.tabla_pipeline_p1, p1, self.proc1_tipo)
+        self.actualizar_tabla_pipeline(self.tabla_pipeline_p2, p2, self.proc2_tipo)
 
         self.actualizar_tablas_laterales()
         self.actualizar_datapaths()
+        self.actualizar_ventanas_mef()
 
 
     def actualizar_tablas_laterales(self):
@@ -1067,19 +1270,37 @@ class SimuladorGUI(tk.Tk):
                 values=(valor,)
             )
 
-    def actualizar_tabla_pipeline(self, tabla, estado_proc):
+    def actualizar_tabla_pipeline(self, tabla, estado_proc, tipo):
+
         stages = estado_proc["pipeline_stages"]
 
-        valores = (
-            estado_proc["pc"],
-            estado_proc["cycle"],
-            estado_proc["elapsed_time_ms"],
-            stages.get("IF", "—"),
-            stages.get("ID", "—"),
-            stages.get("EX", "—"),
-            stages.get("MEM", "—"),
-            stages.get("WB", "—"),
+        es_pipeline = tipo in (
+            "Segmentado (Stalls)",
+            "Segmentado (Forwarding)"
         )
+
+        if es_pipeline:
+            valores = (
+                estado_proc["pc"],
+                estado_proc["cycle"],
+                estado_proc["elapsed_time_ms"],
+                stages.get("IF", "—"),
+                stages.get("ID", "—"),
+                stages.get("EX", "—"),
+                stages.get("MEM", "—"),
+                stages.get("WB", "—"),
+            )
+        else:
+            valores = (
+                estado_proc["pc"],
+                estado_proc["cycle"],
+                estado_proc["elapsed_time_ms"],
+                "—",
+                "—",
+                "—",
+                "—",
+                "—",
+            )
 
         tabla.item("estado", values=valores)
 
@@ -1145,9 +1366,25 @@ class SimuladorGUI(tk.Tk):
 
         for widget in self.area_p2.winfo_children():
             widget.destroy()
+        
+        for widget in self.ventanas_mef.values():
+            if widget.winfo_exists():
+                widget.destroy()
+        
+        # Deseleccionar procesadores
+        for var in self.cpu_vars.values():
+            var.set(False)
+
+        self.proc1_tipo = None
+        self.proc2_tipo = None
+
+        self.actualizar_titulos_procesadores()
+        self.actualizar_selector_mef()
 
         # Reiniciar flags
         self._execution_recorded = False
+        self.ventanas_mef.clear()
+        self.frames_mef.clear()
 
         print("Simulación reiniciada")
 
@@ -1206,3 +1443,80 @@ class SimuladorGUI(tk.Tk):
             return bordes.get(etapa, "#000000")
 
         return "#000000"
+    
+    def abrir_ventana_mef(self, numero_proc):
+
+        if numero_proc in self.ventanas_mef and self.ventanas_mef[numero_proc].winfo_exists():
+            self.ventanas_mef[numero_proc].lift()
+            self.actualizar_ventanas_mef()
+            return
+
+        ventana = tk.Toplevel(self)
+        ventana.title(f"MEF Multiciclo - Procesador {numero_proc}")
+        ventana.geometry("1000x700")
+
+        contenedor = ttk.Frame(ventana, padding=10)
+        contenedor.pack(fill="both", expand=True)
+
+        self.ventanas_mef[numero_proc] = ventana
+        self.frames_mef[numero_proc] = contenedor
+
+        ventana.protocol(
+            "WM_DELETE_WINDOW",
+            lambda n=numero_proc: self.cerrar_ventana_mef(n)
+        )
+
+        self.actualizar_ventanas_mef()
+
+    def actualizar_selector_mef(self):
+
+        for widget in self.barra_vista_p1.winfo_children():
+            widget.destroy()
+
+        if self.proc1_tipo == "Multiciclo":
+            ttk.Button(
+                self.barra_vista_p1,
+                text="Ver MEF",
+                command=lambda: self.abrir_ventana_mef(1)
+            ).pack(side="left", padx=4)
+
+        for widget in self.barra_vista_p2.winfo_children():
+            widget.destroy()
+
+        if self.proc2_tipo == "Multiciclo":
+            ttk.Button(
+                self.barra_vista_p2,
+                text="Ver MEF",
+                command=lambda: self.abrir_ventana_mef(2)
+            ).pack(side="left", padx=4)
+
+    def cerrar_ventana_mef(self, numero_proc):
+        if numero_proc in self.ventanas_mef:
+            self.ventanas_mef[numero_proc].destroy()
+
+        self.ventanas_mef.pop(numero_proc, None)
+        self.frames_mef.pop(numero_proc, None)
+
+
+    def actualizar_ventanas_mef(self):
+        if not self.manager:
+            return
+
+        estado = self.manager.get_full_state()
+
+        for numero_proc, frame in list(self.frames_mef.items()):
+
+            if numero_proc not in self.ventanas_mef:
+                continue
+
+            if not self.ventanas_mef[numero_proc].winfo_exists():
+                self.frames_mef.pop(numero_proc, None)
+                continue
+
+            for widget in frame.winfo_children():
+                widget.destroy()
+
+            estado_proc = estado["processor_1"] if numero_proc == 1 else estado["processor_2"]
+
+            mef = self.dibujar_mef_multiciclo(frame, estado_proc)
+            mef.pack(fill="both", expand=True)
