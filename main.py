@@ -3,6 +3,7 @@ main.py: Pruebas de los procesadores
 """
 
 from core.processors import Unicycle, Multicycle, PipelinedStall, PipelinedForwarding
+from gui import SimuladorGUI
 
 def main():
     # Estructura del programa:
@@ -53,4 +54,6 @@ def main():
         print(f"Ciclos: {proc.stats.cycles}, Instrucciones: {proc.stats.instructions}, Stalls: {getattr(proc.stats, 'stalls', 0)}, Forwards: {getattr(proc.stats, 'forwards', 0)}")
 
 if __name__ == "__main__":
+    simulador = SimuladorGUI()
+    simulador.mainloop()
     main()
