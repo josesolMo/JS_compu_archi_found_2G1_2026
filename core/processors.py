@@ -17,6 +17,7 @@ from .processor_base import (
 # ════════════════════════════════════════════════════════════
 class Unicycle(ProcessorBase):
     name = "Uniciclo"
+    cycle_time_ps = 770
 
     def step(self):
         if self.halted: return
@@ -83,6 +84,7 @@ class Unicycle(ProcessorBase):
 # ════════════════════════════════════════════════════════════
 class Multicycle(ProcessorBase):
     name = "Multiciclo"
+    cycle_time_ps = 410
     STATES = ["IF", "ID", "EX", "MEM", "WB"]
 
     def __init__(self):
@@ -203,6 +205,7 @@ class MEM_WB:
 # ════════════════════════════════════════════════════════════
 class PipelinedStall(ProcessorBase):
     name = "Segmentado (Stalls)"
+    cycle_time_ps = 290
 
     def __init__(self):
         super().__init__()
@@ -348,6 +351,7 @@ class PipelinedStall(ProcessorBase):
 # ════════════════════════════════════════════════════════════
 class PipelinedForwarding(ProcessorBase):
     name = "Segmentado (Forwarding)"
+    cycle_time_ps = 290
 
     def __init__(self):
         super().__init__()

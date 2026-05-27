@@ -140,6 +140,7 @@ class ExecutionStats:
 
 class ProcessorBase(ABC):
     name: str = "Base"
+    cycle_time_ps: int = 0
 
     def __init__(self):
         self.pc:   int       = 0

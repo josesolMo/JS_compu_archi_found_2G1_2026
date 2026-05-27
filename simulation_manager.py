@@ -7,14 +7,13 @@ from core.processor_base import ProcessorBase
 import struct
 
 class SimulationManager:
-    def __init__(self, proc_class_1: Type[ProcessorBase], proc_class_2: Type[ProcessorBase], cycle_time_ms: int = 500):
+    def __init__(self, proc_class_1: Type[ProcessorBase], proc_class_2: Type[ProcessorBase]):
         """
         Inicializa el gestor con las dos clases de procesadores seleccionadas.
         cycle_time_ms define el tiempo que representa cada ciclo para el cálculo del 'Tiempo desde inicio'. (Se debe cambiar)
         """
         self.p1 = proc_class_1()
         self.p2 = proc_class_2()
-        self.cycle_time_ms = cycle_time_ms
         self.program_loaded = False
 
     def load_assembly(self, machine_code: List[int]):
@@ -65,7 +64,7 @@ class SimulationManager:
             "name": proc.name,
             "halted": proc.halted,
             "cycle": proc.stats.cycles,
-            "elapsed_time_ms": proc.stats.cycles * self.cycle_time_ms,
+            "elapsed_time_ms": proc.stats.cycles * proc.cycle_time_ps,
             "pc": f"0x{proc.pc:08X}",
             "registers": registers_hex,
             "pipeline_stages": proc.get_stage_labels(),
