@@ -1,0 +1,1739 @@
+import tkinter as tk
+from tkinter import ttk
+
+from tkinter import messagebox
+from assembler import MiniAssembler
+from simulation_manager import SimulationManager
+from core.processors import Unicycle, Multicycle, PipelinedStall, PipelinedForwarding
+
+class SimuladorGUI(tk.Tk):
+    def __init__(self):
+        super().__init__()
+
+        self.title("Simulador de Procesadores")
+        self.state("zoomed")
+        self.configure(bg="#f2f2f2")
+        self.manager = None
+        self.after_id = None
+        self.historial = []
+        self.proc1_tipo = None
+        self.proc2_tipo = None
+        self.modo_var = tk.StringVar(value="Paso a Paso")
+        self.vista_p1 = tk.StringVar(value="Datapath")
+        self.vista_p2 = tk.StringVar(value="Datapath")
+        self.ventanas_mef = {}
+        self.frames_mef = {}
+        self.en_ejecucion = False
+        self.en_pausa = False
+
+        self.proc_map = {
+            "Uniciclo": Unicycle,
+            "Multiciclo": Multicycle,
+            "Segmentado (Stalls)": PipelinedStall,
+            "Segmentado (Forwarding)": PipelinedForwarding
+        }
+
+        self.crear_layout()
+
+    def crear_layout(self):
+        self.columnconfigure(0, weight=0)
+        self.columnconfigure(1, weight=1)
+        self.rowconfigure(0, weight=1)
+
+        self.panel_izquierdo()
+        self.panel_principal()
+
+    def panel_izquierdo(self):
+        left = ttk.Frame(self, padding=8)
+        left.grid(row=0, column=0, sticky="ns")
+
+        self.panel_ejecucion(left)
+        self.panel_consola(left)
+        self.panel_procesadores(left)
+        self.panel_registros(left)
+        self.panel_memoria(left)
+
+    def panel_principal(self):
+        main = ttk.Frame(self, padding=8)
+        main.grid(row=0, column=1, sticky="nsew")
+
+        main.columnconfigure(0, weight=1)
+        main.rowconfigure(0, weight=1)
+        main.rowconfigure(1, weight=1)
+        main.rowconfigure(2, weight=0)
+
+        self.frame_cpu(main, "Procesador 1", 0)
+        self.frame_cpu(main, "Procesador 2", 1)
+        self.frame_resultados(main)
+
+    def panel_ejecucion(self, parent):
+        frame = ttk.LabelFrame(parent, text="Modo de ejecución", padding=8)
+        frame.pack(fill="x", pady=5)
+
+        self.combo_modo = ttk.Combobox(
+            frame,
+            textvariable=self.modo_var,
+            values=["Paso a Paso", "Automática", "Completa"],
+            width=18,
+            state="readonly"
+        )
+
+        self.combo_modo.grid(row=0, column=0, padx=4)
+
+        self.combo_modo.bind(
+            "<<ComboboxSelected>>",
+            lambda e: self.actualizar_estado_delay()
+        )
+
+        self.btn_run = ttk.Button(
+            frame,
+            text="RUN",
+            command=self.run
+        )
+
+        self.btn_run.grid(row=0, column=1, padx=4)
+
+        self.btn_reset = ttk.Button(
+            frame,
+            text="RESET",
+            command=self.reset_simulacion
+        )
+
+        self.btn_reset.grid(row=1, column=1, padx=4, pady=4)
+
+        self.delay_ms = tk.IntVar(value=1)
+
+        self.spin_delay = ttk.Spinbox(
+            frame,
+            from_=1,
+            to=1000,
+            increment=1,
+            textvariable=self.delay_ms,
+            width=8
+        )
+
+        self.spin_delay.grid(
+            row=1,
+            column=0,
+            pady=6,
+            padx=10,
+            sticky="w"
+        )
+
+        ttk.Label(
+            frame,
+            text="ms"
+        ).grid(row=1, column=0, padx=(80, 0), sticky="w")
+
+        self.actualizar_estado_delay()
+
+    def actualizar_estado_delay(self):
+
+        modo = self.modo_var.get()
+
+        if modo == "Automática":
+            self.spin_delay.config(state="normal")
+        else:
+            self.spin_delay.config(state="disabled")
+
+    def panel_consola(self, parent):
+        frame = ttk.LabelFrame(parent, text="Consola", padding=8)
+        frame.pack(fill="x", pady=5)
+
+        self.consola = tk.Text(frame, width=28, height=9)
+        self.consola.pack(fill="both")
+
+        text = self.consola
+
+        text.insert("end", "ADDI x1, x0, 10\n")
+        text.insert("end", "ADDI x2, x0, 4\n")
+        text.insert("end", "\n")
+        text.insert("end", "ADD x3, x1, x2\n")
+        text.insert("end", "ADD x4, x3, x1\n")
+        text.insert("end", "\n")
+        text.insert("end", "SW x4, 0(x0)\n")
+        text.insert("end", "LW x5, 0(x0)\n")
+        text.insert("end", "\n")
+        text.insert("end", "ADD x6, x5, x2\n")
+        text.insert("end", "ADD x7, x6, x1\n")
+        text.insert("end", "ADD x8, x7, x6\n")
+
+    def panel_procesadores(self, parent):
+
+        frame = ttk.LabelFrame(parent, text="Procesadores", padding=8)
+        frame.pack(fill="x", pady=5)
+
+        self.cpu_vars = {}
+
+        opciones = [
+            "Uniciclo",
+            "Multiciclo",
+            "Segmentado (Stalls)",
+            "Segmentado (Forwarding)"
+        ]
+
+        for op in opciones:
+
+            var = tk.BooleanVar(value=False)
+            self.cpu_vars[op] = var
+
+            chk = ttk.Checkbutton(
+                frame,
+                text=op,
+                variable=var,
+                command=self.actualizar_datapaths
+            )
+
+            chk.pack(anchor="w", pady=2)
+    
+    def limitar_seleccion(self):
+
+        activos = [
+            op for op, var in self.cpu_vars.items()
+            if var.get()
+        ]
+
+        if len(activos) > 2:
+
+            ultimo = activos[-1]
+            self.cpu_vars[ultimo].set(False)
+    
+    def actualizar_datapaths(self):
+
+        activos = [
+            op for op, var in self.cpu_vars.items()
+            if var.get()
+        ]
+
+        if len(activos) > 2:
+            ultimo = activos[-1]
+            self.cpu_vars[ultimo].set(False)
+            activos = activos[:2]
+
+        for widget in self.area_p1.winfo_children():
+            widget.destroy()
+
+        for widget in self.area_p2.winfo_children():
+            widget.destroy()
+
+        estado = self.manager.get_full_state() if self.manager else None
+
+        self.proc1_tipo = None
+        self.proc2_tipo = None
+
+        if len(activos) >= 1:
+            self.proc1_tipo = activos[0]
+            estado_p1 = estado["processor_1"] if estado else None
+
+            self.dibujar_por_tipo(self.area_p1, activos[0], estado_p1)
+
+        if len(activos) >= 2:
+            self.proc2_tipo = activos[1]
+            estado_p2 = estado["processor_2"] if estado else None
+
+            self.dibujar_por_tipo(self.area_p2, activos[1], estado_p2)
+
+        self.actualizar_titulos_procesadores()
+        self.actualizar_selector_mef()
+    
+    def dibujar_por_tipo(self, frame, tipo, estado_proc=None):
+
+        if tipo == "Uniciclo":
+            canvas = self.dibujar_datapath_uniciclo(frame, estado_proc)
+        elif tipo == "Multiciclo":
+            canvas = self.dibujar_datapath_multiciclo(frame, estado_proc)
+        elif tipo == "Segmentado (Stalls)":
+            canvas = self.dibujar_datapath_segmentado_stalls(frame, estado_proc)
+        elif tipo == "Segmentado (Forwarding)":
+            canvas = self.dibujar_datapath_segmentado_forwarding(frame, estado_proc)
+        else:
+            return
+
+        canvas.grid(row=0, column=0, sticky="nsew")
+
+    def panel_registros(self, parent):
+
+        frame = ttk.LabelFrame(parent, text="Registros", padding=5)
+        frame.pack(fill="both", expand=True, pady=5)
+
+        self.procesador_actual = tk.StringVar(value="P1")
+
+        # Barra superior
+        barra = ttk.Frame(frame)
+        barra.pack(fill="x", pady=(0, 5))
+
+        ttk.Radiobutton(
+            barra,
+            text="P1",
+            variable=self.procesador_actual,
+            value="P1",
+            command=self.actualizar_tablas_laterales
+        ).pack(side="left", expand=True)
+
+        ttk.Radiobutton(
+            barra,
+            text="P2",
+            variable=self.procesador_actual,
+            value="P2",
+            command=self.actualizar_tablas_laterales
+        ).pack(side="left", expand=True)
+
+        # Contenedor tabla + scroll
+        contenedor = ttk.Frame(frame)
+        contenedor.pack(fill="both", expand=True)
+
+        tabla = ttk.Treeview(
+            contenedor,
+            columns=("registro", "valor"),
+            show="headings",
+            height=6
+        )
+
+        tabla.heading("registro", text="Registro")
+        tabla.heading("valor", text="Valor")
+
+        tabla.column("registro", width=70, anchor="center")
+        tabla.column("valor", width=140, anchor="center")
+
+        # Scroll vertical
+        scroll = ttk.Scrollbar(
+            contenedor,
+            orient="vertical",
+            command=tabla.yview
+        )
+
+        tabla.configure(yscrollcommand=scroll.set)
+
+        tabla.pack(side="left", fill="both", expand=True)
+        scroll.pack(side="right", fill="y")
+
+        self.tabla_registros = tabla
+        self.procesador_actual.trace_add(
+            "write",
+            lambda *args: self.actualizar_tablas_laterales()
+        )
+
+        # Registros vacíos
+        for i in range(32):
+            tabla.insert(
+                "",
+                "end",
+                values=(f"x{i}", "0x00000000")
+            )
+
+    def panel_memoria(self, parent):
+
+        frame = ttk.LabelFrame(parent, text="Memoria", padding=5)
+        frame.pack(fill="both", expand=True, pady=5)
+
+        self.memoria_actual = tk.StringVar(value="P1")
+
+        # Botones P1 / P2
+        barra = ttk.Frame(frame)
+        barra.pack(fill="x", pady=(0, 5))
+
+        ttk.Radiobutton(
+            barra,
+            text="P1",
+            variable=self.memoria_actual,
+            value="P1",
+            command=self.actualizar_tablas_laterales
+        ).pack(side="left", expand=True)
+
+        ttk.Radiobutton(
+            barra,
+            text="P2",
+            variable=self.memoria_actual,
+            value="P2",
+            command=self.actualizar_tablas_laterales
+        ).pack(side="left", expand=True)
+
+        # Contenedor tabla + scroll
+        contenedor = ttk.Frame(frame)
+        contenedor.pack(fill="both", expand=True)
+
+        tabla = ttk.Treeview(
+            contenedor,
+            columns=("valor",),
+            show="tree headings",
+            height=10
+        )
+
+        # Columna izquierda (direcciones)
+        tabla.heading("#0", text="Dirección")
+        tabla.column("#0", width=90, anchor="w")
+
+        # Columna valores
+        tabla.heading("valor", text="Valor")
+        tabla.column("valor", width=140, anchor="center")
+
+        # Scrollbar
+        scroll = ttk.Scrollbar(
+            contenedor,
+            orient="vertical",
+            command=tabla.yview
+        )
+
+        tabla.configure(yscrollcommand=scroll.set)
+
+        tabla.pack(side="left", fill="both", expand=True)
+        scroll.pack(side="right", fill="y")
+
+        self.tabla_memoria = tabla
+        self.memoria_actual.trace_add(
+            "write",
+            lambda *args: self.actualizar_tablas_laterales()
+        )
+
+        # Espacios de memoria
+        for i in range(256):
+
+            direccion = f"0x{i*4:04X}"
+
+            tabla.insert(
+                "",
+                "end",
+                text=direccion,
+                values=("0x00000000",)
+            )
+
+    def frame_cpu(self, parent, titulo, fila):
+        frame = ttk.LabelFrame(parent, text=titulo, padding=5)
+
+        if titulo == "Procesador 1":
+            self.frame_proc1 = frame
+        else:
+            self.frame_proc2 = frame
+
+        frame.grid(row=fila, column=0, sticky="nsew", pady=5)
+
+        frame.columnconfigure(0, weight=1)
+        frame.rowconfigure(2, weight=1)
+
+        # Barra opcional Datapath / MEF
+        barra_vista = ttk.Frame(frame)
+        barra_vista.grid(row=0, column=0, sticky="w", pady=(0, 3))
+
+        if titulo == "Procesador 1":
+            self.barra_vista_p1 = barra_vista
+            vista_var = self.vista_p1
+        else:
+            self.barra_vista_p2 = barra_vista
+            vista_var = self.vista_p2
+
+        # Tabla superior
+        tabla = self.tabla_pipeline(frame)
+        tabla.grid(row=1, column=0, sticky="ew")
+
+        if titulo == "Procesador 1":
+            self.tabla_pipeline_p1 = tabla
+        else:
+            self.tabla_pipeline_p2 = tabla
+
+        # Área donde se dibuja datapath o MEF
+        area = ttk.Frame(frame, height=220)
+        area.grid(row=2, column=0, sticky="nsew")
+        area.grid_propagate(False)
+
+        area.columnconfigure(0, weight=1)
+        area.rowconfigure(0, weight=1)
+
+        if titulo == "Procesador 1":
+            self.area_p1 = area
+        else:
+            self.area_p2 = area
+    
+    def dibujar_datapath_uniciclo(self, frame, estado_proc=None):
+        stages = estado_proc["pipeline_stages"] if estado_proc else {}
+        canvas = tk.Canvas(frame, bg="white", height=230)
+
+        def bloque(x1, y1, x2, y2, texto, etapa=None):
+            activo = etapa and stages.get(etapa) not in ("", "—", None)
+
+            if activo:
+                fill = "#fff3cd"      
+                outline = "#c97a00"   
+                width = 3
+            else:
+                fill = "white"
+                outline = "black"
+                width = 1
+
+            canvas.create_rectangle(
+                x1, y1, x2, y2,
+                width=width,
+                fill=fill,
+                outline=outline
+            )
+
+            canvas.create_text((x1+x2)//2, (y1+y2)//2, text=texto)
+
+        def cable(x1, y1, x2, y2, dash=None):
+            canvas.create_line(x1,y1,x2,y2,width=2,dash=dash)
+
+        # Bloques
+        bloque(20, 95, 120, 145, "PC", "IF")
+        bloque(190, 95, 310, 145, "Instruction\nMemory", "IF")
+        bloque(390, 95, 510, 145, "Register\nFile", "ID")
+        bloque(390, 175, 510, 225, "Immediate\nGenerator", "ID")
+        bloque(590, 95, 710, 145, "ALU", "EX")
+        bloque(790, 95, 920, 145, "Data Memory", "MEM")
+        bloque(790, 20, 920, 70, "WB MUX", "WB")
+        bloque(1010, 95, 1130, 145, "PC + 4 /\nBranch", "EX")
+        bloque(290, 10, 410, 60, "Control Unit", "ID")
+
+        # Ruta principal
+        cable(120, 120, 190, 120)
+        cable(310, 120, 390, 120)
+        cable(510, 120, 590, 120)
+        cable(710, 120, 790, 120)
+        cable(920, 120, 1010, 120)
+
+        # PC a PC+4/Branch por abajo
+        canvas.create_line(70, 145, 70, 215, width=1)
+        canvas.create_line(70, 215, 1070, 215, width=1)
+        cable(1070, 215, 1070, 145)
+
+        # PC+4/Branch hacia PC por arriba
+        canvas.create_line(1130, 120, 1160, 120, width=1)
+        canvas.create_line(1160, 120, 1160, 5, width=1)
+        canvas.create_line(1160, 5, 70, 5, width=1)
+        cable(70, 5, 70, 95)
+
+        # Instruction Memory a Immediate Generator
+        canvas.create_line(250, 145, 250, 200, width=1)
+        cable(250, 200, 390, 200)
+
+        # Immediate Generator a ALU
+        canvas.create_line(510, 200, 650, 200, width=1)
+        cable(650, 200, 650, 145)
+
+        # Data Memory a WB MUX
+        canvas.create_line(855, 95, 855, 70, width=1)
+        cable(855, 70, 855, 70)
+
+        # ALU a WB MUX
+        canvas.create_line(650, 95, 650, 45, width=1)
+        cable(650, 45, 790, 45)
+
+        # WB MUX a Register File
+        canvas.create_line(790, 45, 560, 45, width=1)
+        canvas.create_line(560, 45, 560, 95, width=1)
+        cable(560, 95, 510, 95)
+
+        # WB MUX a PC+4/Branch
+        canvas.create_line(920, 45, 1090, 45, width=1)
+        cable(1090, 45, 1090, 95)
+
+        # Control Unit
+        cable(350, 60, 350, 120)
+
+        # Control Unit a Register File
+        canvas.create_line(410, 45, 430, 45, width=1, dash=(3, 3))
+        canvas.create_line(430, 45, 430, 95, width=1, dash=(3, 3))
+        cable(430, 95, 430, 95, dash=(3, 3))
+
+        # Control Unit a ALU
+        canvas.create_line(410, 35, 620, 35, width=1, dash=(3, 3))
+        canvas.create_line(620, 35, 620, 95, width=1, dash=(3, 3))
+        cable(620, 95, 620, 95, dash=(3, 3))
+
+        # Control Unit a Data Memory
+        canvas.create_line(410, 55, 840, 55, width=1, dash=(3, 3))
+        canvas.create_line(840, 55, 840, 95, width=1, dash=(3, 3))
+        cable(840, 95, 840, 95, dash=(3, 3))
+
+        # Control Unit a WB MUX
+        canvas.create_line(410, 20, 790, 20, width=1, dash=(3, 3))
+        cable(790, 20, 790, 45, dash=(3, 3))
+
+        # Control Unit a PC+4/Branch
+        canvas.create_line(410, 10, 1130, 10, width=1, dash=(3, 3))
+        canvas.create_line(1130, 10, 1130, 95, width=1, dash=(3, 3))
+        cable(1130, 95, 1130, 95, dash=(3, 3))
+
+        return canvas
+    
+    def dibujar_datapath_multiciclo(self, frame, estado_proc=None):
+        stages = estado_proc["pipeline_stages"] if estado_proc else {}
+        canvas = tk.Canvas(frame, bg="white", height=210)
+
+        estado_activo = None
+        for estado in [
+            "S0: Fetch", "S1: Decode", "S2: MemAdr", "S3: MemRead",
+            "S4: MemWB", "S5: MemWrite", "S6: ExecuteR", "S7: ALUWB",
+            "S8: ExecuteI", "S9: JAL", "S10: BEQ"
+        ]:
+            if stages.get(estado, "—") not in ("", "—", None):
+                estado_activo = estado
+                break
+
+        modulos_por_estado = {
+            "S0: Fetch": {
+                "PC", "MUX\nPC", "Unified\nMemory", "IR",
+                "MUX\nSrcA", "MUX\nSrcB", "ALU", "MUX\nResult", "Control Unit"
+            },
+
+            "S1: Decode": {
+                "IR", "Register\nFile", "Sign\nExtend",
+                "Reg A", "Reg B", "Control Unit"
+            },
+
+            "S2: MemAdr": {
+                "Reg A", "Sign\nExtend", "MUX\nSrcA",
+                "MUX\nSrcB", "ALU", "ALU\nOut", "Control Unit"
+            },
+
+            "S3: MemRead": {
+                "ALU\nOut", "Unified\nMemory", "MDR", "Control Unit"
+            },
+
+            "S4: MemWB": {
+                "MDR", "MUX\nResult", "Register\nFile", "Control Unit"
+            },
+
+            "S5: MemWrite": {
+                "Reg B", "ALU\nOut", "Unified\nMemory", "Control Unit"
+            },
+
+            "S6: ExecuteR": {
+                "Reg A", "Reg B", "MUX\nSrcA",
+                "MUX\nSrcB", "ALU", "ALU\nOut", "Control Unit"
+            },
+
+            "S7: ALUWB": {
+                "ALU\nOut", "MUX\nResult", "Register\nFile", "Control Unit"
+            },
+
+            "S8: ExecuteI": {
+                "Reg A", "Sign\nExtend", "MUX\nSrcA",
+                "MUX\nSrcB", "ALU", "ALU\nOut", "Control Unit"
+            },
+
+            "S9: JAL": {
+                "PC", "MUX\nPC", "MUX\nResult",
+                "ALU\nOut", "Control Unit"
+            },
+
+            "S10: BEQ": {
+                "PC", "MUX\nPC", "Reg A", "Reg B",
+                "MUX\nSrcA", "MUX\nSrcB", "ALU",
+                "MUX\nResult", "Control Unit"
+            },
+        }
+
+        modulos_activos = modulos_por_estado.get(estado_activo, set())
+
+        def bloque(x1, y1, x2, y2, texto, etapa=None):
+            activo = texto in modulos_activos
+
+            if activo:
+                fill = "#fff3cd"
+                outline = "#c97a00"
+                width = 3
+            else:
+                fill = "white"
+                outline = "black"
+                width = 1
+
+            canvas.create_rectangle(
+                x1, y1, x2, y2,
+                width=width,
+                fill=fill,
+                outline=outline
+            )
+
+            canvas.create_text((x1+x2)//2, (y1+y2)//2, text=texto)
+
+        def cable(x1, y1, x2, y2, dash=None):
+            canvas.create_line(x1,y1,x2,y2,width=2,dash=dash)
+
+        bloque(20, 95, 70, 125, "PC", "IF")
+        bloque(100, 95, 165, 125, "MUX\nPC", "IF")
+        bloque(200, 90, 275, 130, "Unified\nMemory", "IF")
+
+        bloque(330, 75, 385, 105, "IR", "ID")
+        bloque(330, 130, 385, 160, "MDR", "MEM")
+
+        bloque(455, 105, 545, 140, "Register\nFile", "ID")
+        bloque(455, 35, 545, 65, "Sign\nExtend", "ID")
+
+        bloque(610, 65, 670, 95, "Reg B", "ID")
+        bloque(610, 135, 670, 165, "Reg A", "ID")
+
+        bloque(725, 55, 795, 85, "MUX\nSrcB", "EX")
+        bloque(725, 135, 795, 165, "MUX\nSrcA", "EX")
+
+        bloque(850, 95, 910, 125, "ALU", "EX")
+        bloque(960, 95, 1030, 125, "ALU\nOut", "EX")
+        bloque(1080, 95, 1160, 125, "MUX\nResult", "WB")
+
+        bloque(610, 5, 710, 35, "Control Unit", "ID")
+
+        cable(70, 110, 100, 110)
+        cable(165, 110, 200, 110)
+
+        canvas.create_line(275, 110, 305, 110)
+        canvas.create_line(305, 110, 305, 90)
+        cable(305, 90, 330, 90)
+
+        canvas.create_line(305, 110, 305, 145)
+        cable(305, 145, 330, 145)
+
+        canvas.create_line(385, 90, 420, 90)
+        canvas.create_line(420, 90, 420, 122)
+        cable(420, 122, 455, 122)
+
+        canvas.create_line(385, 90, 420, 90)
+        canvas.create_line(420, 90, 420, 50)
+        cable(420, 50, 455, 50)
+
+        canvas.create_line(385, 145, 420, 145)
+        canvas.create_line(420, 145, 420, 132)
+        cable(420, 132, 455, 132)
+
+        canvas.create_line(545, 122, 580, 122)
+        canvas.create_line(580, 122, 580, 80)
+        cable(580, 80, 610, 80)
+
+        canvas.create_line(580, 122, 580, 150)
+        cable(580, 150, 610, 150)
+
+        cable(670, 80, 725, 80)
+        cable(670, 150, 725, 150)
+
+        canvas.create_line(545, 50, 700, 50)
+        canvas.create_line(700, 50, 700, 70)
+        cable(700, 70, 725, 70)
+
+        canvas.create_line(795, 70, 825, 70)
+        canvas.create_line(825, 70, 825, 103)
+        cable(825, 103, 850, 103)
+
+        canvas.create_line(795, 150, 825, 150)
+        canvas.create_line(825, 150, 825, 117)
+        cable(825, 117, 850, 117)
+
+        cable(910, 110, 960, 110)
+        cable(1030, 110, 1080, 110)
+
+        canvas.create_line(1160, 110, 1185, 110)
+        canvas.create_line(1185, 110, 1185, 50)
+        canvas.create_line(1185, 50, 132, 50)
+        cable(132, 50, 132, 95)
+
+        canvas.create_line(1120, 125, 1120, 190)
+        canvas.create_line(1120, 190, 500, 190)
+        cable(500, 190, 500, 140)
+
+        canvas.create_line(45, 125, 45, 200)
+        canvas.create_line(45, 200, 760, 200)
+        cable(760, 200, 760, 165)
+
+        canvas.create_line(995, 125, 995, 205)
+        canvas.create_line(995, 205, 238, 205)
+        cable(238, 205, 238, 130)
+
+        cable(650, 35, 760, 55, dash=(3, 3))
+        cable(660, 35, 760, 135, dash=(3, 3))
+        cable(710, 20, 880, 95, dash=(3, 3))
+        cable(710, 15, 1120, 95, dash=(3, 3))
+        cable(610, 20, 132, 95, dash=(3, 3))
+
+        return canvas
+    
+    def dibujar_mef_multiciclo(self, frame, estado_proc=None):
+        stages = estado_proc["pipeline_stages"] if estado_proc else {}
+
+        estado_activo = None
+        for estado in ["S0: Fetch", "S1: Decode", "S2: MemAdr", "S3: MemRead", 
+        "S4: MemWB", "S5: MemWrite", "S6: ExecuteR", "S7: ALUWB", 
+        "S8: ExecuteI", "S9: JAL", "S10: BEQ"]:
+            if stages.get(estado, "—") not in ("", "—", None):
+                estado_activo = estado
+                break
+
+        # Contenedor con scroll
+        contenedor = ttk.Frame(frame)
+        contenedor.pack(fill="both", expand=True)
+
+        scroll_x = ttk.Scrollbar(contenedor, orient="horizontal")
+        scroll_y = ttk.Scrollbar(contenedor, orient="vertical")
+
+        canvas = tk.Canvas(
+            contenedor,
+            bg="white",
+            width=900,
+            height=360,
+            xscrollcommand=scroll_x.set,
+            yscrollcommand=scroll_y.set
+        )
+
+        scroll_x.config(command=canvas.xview)
+        scroll_y.config(command=canvas.yview)
+
+        scroll_x.pack(side="bottom", fill="x")
+        scroll_y.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+
+        canvas.configure(scrollregion=(0, 0, 950, 760))
+
+        activos_visuales = {
+            "S0: Fetch": ["S0"],
+            "S1: Decode": ["S1"],
+            "S2: MemAdr": ["S2"],
+            "S3: MemRead": ["S3"],
+            "S4: MemWB": ["S4"],
+            "S5: MemWrite": ["S5"],
+            "S6: ExecuteR": ["S6"],
+            "S7: ALUWB": ["S7"],
+            "S8: ExecuteI": ["S8"],
+            "S9: JAL": ["S9"],
+            "S10: BEQ": ["S10"]
+        }
+
+        estados_activos = activos_visuales.get(estado_activo, [])
+
+        estados = {
+            "S0": (180, 80,  "S0: Fetch"),
+            "S1": (420, 90,  "S1: Decode"),
+
+            "S2": (120, 250, "S2: MemAdr"),
+            "S6": (330, 250, "S6: ExecuteR"),
+            "S8": (520, 250, "S8: ExecuteI"),
+            "S9": (635, 250, "S9: JAL"),
+            "S10": (760, 250, "S10: BEQ"),
+
+            "S3": (120, 430, "S3: MemRead"),
+            "S5": (330, 430, "S5: MemWrite"),
+            "S7": (540, 430, "S7: ALUWB"),
+
+            "S4": (120, 610, "S4: MemWB"),
+        }
+
+        r = 45
+
+        def centro(s):
+            return estados[s][0], estados[s][1]
+
+        def punto_borde(a, b):
+            import math
+
+            x1, y1 = centro(a)
+            x2, y2 = centro(b)
+
+            dx = x2 - x1
+            dy = y2 - y1
+            dist = math.sqrt(dx * dx + dy * dy)
+
+            if dist == 0:
+                return x1, y1, x2, y2
+
+            ux = dx / dist
+            uy = dy / dist
+
+            return (
+                x1 + ux * r,
+                y1 + uy * r,
+                x2 - ux * r,
+                y2 - uy * r
+            )
+
+        def cable(x1, y1, x2, y2, texto="", width=1.7):
+            canvas.create_line(
+                x1, y1, x2, y2,
+                width=width,
+                arrow="last",
+                arrowshape=(14, 18, 6)
+            )
+
+            if texto:
+                canvas.create_text(
+                    (x1 + x2) / 2,
+                    (y1 + y2) / 2 - 15,
+                    text=texto,
+                    font=("Arial", 9),
+                    justify="center"
+                )
+
+        def flecha(a, b, texto=""):
+            x1, y1, x2, y2 = punto_borde(a, b)
+            cable(x1, y1, x2, y2, texto=texto)
+
+        # Transiciones principales
+        flecha("S0", "S1")
+        flecha("S1", "S2", "Memory\nOp = 01")
+        flecha("S2", "S3", "LDR")
+        flecha("S2", "S4", "STR")
+        flecha("S2", "S5")
+        flecha("S1", "S6", "Data Reg")
+        flecha("S1", "S8", "Data Imm")
+        flecha("S1", "S9", "JAL")
+        flecha("S9", "S7")
+        flecha("S1", "S10", "BEQ")
+        flecha("S6", "S7")
+        flecha("S8", "S7")
+
+        # Retornos hacia Fetch
+        y_retorno = 690
+        x_retorno = 860
+
+        canvas.create_line(120, 610 + r, 120, y_retorno, width=1.5)
+        canvas.create_line(330, 430 + r, 330, y_retorno, width=1.5)
+        canvas.create_line(540, 430 + r, 540, y_retorno, width=1.5)
+        canvas.create_line(760, 250 + r, 760, y_retorno, width=1.5)
+
+        canvas.create_line(120, y_retorno, x_retorno, y_retorno, width=1.5)
+        canvas.create_line(x_retorno, y_retorno, x_retorno, 30, width=1.5)
+
+        cable(x_retorno, 30, 180, 30)
+
+        # Reset
+        canvas.create_text(55, 90, text="Reset", font=("Arial", 10))
+        cable(90, 90, 170 - r, 90)
+
+        # Estados
+        for clave, (x, y, texto) in estados.items():
+            activo = clave in estados_activos
+
+            canvas.create_oval(
+                x - r, y - r,
+                x + r, y + r,
+                fill="#ffe0b2" if activo else "white",
+                outline="#c97a00" if activo else "black",
+                width=4 if activo else 1
+            )
+
+            canvas.create_text(
+                x,
+                y,
+                text=texto,
+                font=("Arial", 10, "bold") if activo else ("Arial", 10),
+                justify="center"
+            )
+
+        return contenedor
+
+    def dibujar_datapath_segmentado_stalls(self, frame, estado_proc=None):
+        stages = estado_proc["pipeline_stages"] if estado_proc else {}
+        canvas = tk.Canvas(frame, bg="white", height=210)
+
+        def bloque(x1, y1, x2, y2, texto, etapa=None):
+            fill = self.color_por_etapa(etapa, stages) if etapa else "white"
+            outline = self.borde_por_etapa(etapa, stages) if etapa else "black"
+
+            canvas.create_rectangle(
+                x1, y1, x2, y2,
+                width=2 if etapa and stages.get(etapa) not in ("", "—", None) else 1,
+                fill=fill,
+                outline=outline
+            )
+            canvas.create_text((x1+x2)//2, (y1+y2)//2, text=texto)
+
+        def cable(x1, y1, x2, y2, dash=None):
+            canvas.create_line(x1,y1,x2,y2,width=2,dash=dash)
+
+        bloque(20, 80, 70, 110, "PC", "IF")
+        bloque(120, 80, 205, 110, "Instruction\nMemory", "IF")
+
+        bloque(260, 45, 295, 155, "IF/ID", "IF")
+        bloque(355, 45, 450, 75, "Register\nFile", "ID")
+        bloque(355, 125, 450, 155, "Sign Extend", "ID")
+
+        bloque(520, 45, 555, 155, "ID/EX", "ID")
+        bloque(625, 80, 700, 110, "ALU", "EX")
+        bloque(625, 155, 715, 185, "PC+4/Branch", "EX")
+
+        bloque(775, 45, 810, 155, "EX/\nMEM", "EX")
+        bloque(875, 80, 965, 110, "Data\nMemory", "MEM")
+
+        bloque(1035, 45, 1070, 155, "MEM/\nWB", "MEM")
+        bloque(1130, 80, 1210, 110, "MUX\nResult", "WB")
+
+        bloque(190, 175, 430, 205, "Hazard Unit", "ID")
+        bloque(200, 5, 290, 35, "Control Unit", "ID")
+
+        # Ruta principal
+        cable(70, 95, 120, 95)
+        cable(205, 95, 260, 95)
+
+        cable(295, 70, 355, 60)
+        cable(295, 140, 355, 140)
+
+        cable(450, 60, 520, 60)
+        cable(450, 140, 520, 140)
+
+        cable(555, 95, 625, 95)
+
+        cable(700, 95, 775, 95)
+        cable(810, 95, 875, 95)
+        cable(965, 95, 1035, 95)
+        cable(1070, 95, 1130, 95)
+
+        # ALU hacia PC+4/Branch
+        canvas.create_line(662, 110, 662, 155, width=1)
+
+        # PC+4/Branch hacia PC por abajo
+        canvas.create_line(670, 170, 45, 170, width=1)
+        canvas.create_line(45, 170, 45, 110, width=1)
+
+        # Camino superior de writeback / PC update
+        canvas.create_line(1210, 95, 1240, 95, width=1)
+        canvas.create_line(1240, 95, 1240, 25, width=1)
+        canvas.create_line(1240, 25, 45, 25, width=1)
+        canvas.create_line(45, 25, 45, 80, width=1)
+
+        # MEM/WB hacia MUX Result
+        cable(1070, 95, 1130, 95)
+
+        # Forward visual desde MEM/WB hacia EX/MEM
+        canvas.create_line(1052, 45, 1052, 30, width=1)
+        canvas.create_line(1052, 30, 792, 30, width=1)
+        canvas.create_line(792, 30, 792, 45, width=1)
+
+        # Control Unit punteado
+        canvas.create_line(290, 20, 1052, 20, width=1, dash=(3, 3))
+        canvas.create_line(1052, 20, 1052, 45, width=1, dash=(3, 3))
+
+        canvas.create_line(290, 25, 792, 25, width=1, dash=(3, 3))
+        canvas.create_line(792, 25, 792, 45, width=1, dash=(3, 3))
+
+        canvas.create_line(290, 30, 537, 30, width=1, dash=(3, 3))
+        canvas.create_line(537, 30, 537, 45, width=1, dash=(3, 3))
+
+        # Control Unit hacia Register File
+        canvas.create_line(245, 35, 245, 60, width=1, dash=(3, 3))
+        canvas.create_line(245, 60, 355, 60, width=1, dash=(3, 3))
+
+        # Hazard Unit conexiones
+        canvas.create_line(278, 155, 278, 175, width=1)
+        canvas.create_line(370, 175, 370, 155, width=1)
+
+        canvas.create_line(430, 190, 535, 190, width=1)
+        canvas.create_line(535, 190, 535, 155, width=1)
+
+        canvas.create_line(190, 190, 45, 190, width=1)
+        canvas.create_line(45, 190, 45, 110, width=1)
+
+        # Hazard Unit hacia Control Unit
+        canvas.create_line(230, 175, 230, 35, width=1, dash=(3, 3))
+        canvas.create_line(230, 35, 245, 35, width=1  , dash=(3, 3))
+
+        return canvas
+    
+    def dibujar_datapath_segmentado_forwarding(self, frame, estado_proc=None):
+        stages = estado_proc["pipeline_stages"] if estado_proc else {}
+        canvas = tk.Canvas(frame, bg="white", height=210)
+
+        def bloque(x1, y1, x2, y2, texto, etapa=None):
+            fill = self.color_por_etapa(etapa, stages) if etapa else "white"
+            outline = self.borde_por_etapa(etapa, stages) if etapa else "black"
+
+            canvas.create_rectangle(
+                x1, y1, x2, y2,
+                width=2 if etapa and stages.get(etapa) not in ("", "—", None) else 1,
+                fill=fill,
+                outline=outline
+            )
+            canvas.create_text((x1+x2)//2, (y1+y2)//2, text=texto)
+
+        def cable(x1, y1, x2, y2, dash=None):
+            canvas.create_line(x1,y1,x2,y2,width=2,dash=dash)
+
+        bloque(20, 80, 70, 110, "PC", "IF")
+        bloque(120, 80, 205, 110, "Instruction\nMemory", "IF")
+
+        bloque(260, 45, 295, 155, "IF/ID", "IF")
+        bloque(355, 45, 450, 75, "Register\nFile", "ID")
+        bloque(355, 125, 450, 155, "Sign Extend", "ID")
+
+        bloque(520, 45, 555, 155, "ID/EX", "ID")
+
+        bloque(635, 80, 710, 110, "ALU", "EX")
+        bloque(635, 155, 725, 185, "PC+4/Branch", "EX")
+
+        bloque(785, 45, 820, 155, "EX/\nMEM", "EX")
+        bloque(885, 80, 975, 110, "Data\nMemory", "MEM")
+
+        bloque(1045, 45, 1080, 155, "MEM/\nWB", "MEM")
+        bloque(1140, 80, 1220, 110, "MUX\nResult", "WB")
+
+        bloque(190, 175, 430, 205, "Hazard Unit", "ID")
+        bloque(200, 5, 290, 35, "Control Unit", "ID")
+
+        # Ruta principal
+        cable(70, 95, 120, 95)
+        cable(205, 95, 260, 95)
+
+        cable(295, 70, 355, 60)
+        cable(295, 140, 355, 140)
+
+        cable(450, 60, 520, 60)
+        cable(450, 140, 520, 140)
+
+        cable(555, 95, 635, 95)
+
+        cable(710, 95, 785, 95)
+        cable(820, 95, 885, 95)
+        cable(975, 95, 1045, 95)
+        cable(1080, 95, 1140, 95)
+
+        # ALU -> PC+4/Branch
+        canvas.create_line(672, 110, 672, 155, width=1)
+
+        # PC+4/Branch -> PC
+        canvas.create_line(680, 170, 45, 170, width=1)
+        canvas.create_line(45, 170, 45, 110, width=1)
+
+        # Writeback superior
+        canvas.create_line(1220, 95, 1245, 95, width=1)
+        canvas.create_line(1245, 95, 1245, 25, width=1)
+        canvas.create_line(1245, 25, 45, 25, width=1)
+        canvas.create_line(45, 25, 45, 80, width=1)
+
+        # Forwarding EX/MEM -> ALU entrada superior
+        canvas.create_line(802, 45, 802, 35, width=1)
+        canvas.create_line(802, 35, 670, 35, width=1)
+        canvas.create_line(670, 35, 670, 80, width=1)
+
+        # Forwarding MEM/WB -> ALU entrada inferior
+        canvas.create_line(1062, 155, 1062, 195, width=1)
+        canvas.create_line(1062, 195, 695, 195, width=1)
+        canvas.create_line(695, 195, 695, 110, width=1)
+
+        # Forwarding MEM/WB -> EX/MEM
+        canvas.create_line(1062, 45, 1062, 35, width=1)
+        canvas.create_line(1062, 35, 802, 35, width=1)
+        canvas.create_line(802, 35, 802, 45, width=1)
+
+        # MUX Result -> Register File
+        canvas.create_line(1180, 110, 1180, 195, width=1)
+        canvas.create_line(1180, 195, 402, 195, width=1)
+        canvas.create_line(402, 195, 402, 75, width=1)
+
+        # Hazard Unit conexiones
+        canvas.create_line(278, 155, 278, 175, width=1)
+        canvas.create_line(370, 175, 370, 155, width=1)
+
+        canvas.create_line(430, 190, 538, 190, width=1)
+        canvas.create_line(538, 190, 538, 155, width=1)
+
+        canvas.create_line(190, 190, 45, 190, width=1)
+        canvas.create_line(45, 190, 45, 110, width=1)
+
+        # Hazard Unit -> ALU/Forwarding
+        canvas.create_line(430, 185, 650, 185, width=1)
+        canvas.create_line(650, 185, 650, 110, width=1)
+
+        canvas.create_line(430, 200, 1080, 200, width=1)
+        canvas.create_line(1080, 200, 1080, 155, width=1)
+
+        # Control Unit punteado
+        canvas.create_line(290, 20, 1062, 20, width=1, dash=(3, 3))
+        canvas.create_line(1062, 20, 1062, 45, width=1, dash=(3, 3))
+
+        canvas.create_line(290, 25, 802, 25, width=1, dash=(3, 3))
+        canvas.create_line(802, 25, 802, 45, width=1, dash=(3, 3))
+
+        canvas.create_line(290, 30, 537, 30, width=1, dash=(3, 3))
+        canvas.create_line(537, 30, 537, 45, width=1, dash=(3, 3))
+
+        canvas.create_line(245, 35, 245, 60, width=1, dash=(3, 3))
+        canvas.create_line(245, 60, 355, 60, width=1, dash=(3, 3))
+
+        # Hazard -> Control Unit
+        canvas.create_line(230, 175, 230, 35, width=1, dash=(3, 3))
+        canvas.create_line(230, 35, 245, 35, width=1, dash=(3, 3))
+
+        return canvas
+
+    def tabla_pipeline(self, parent):
+        tabla = ttk.Treeview(
+            parent,
+            columns=("PC", "CICLO", "TIEMPO", "IF", "ID", "EX", "MEM", "WB"),
+            show="headings",
+            height=1
+        )
+
+        columnas = ["PC", "CICLO", "TIEMPO", "IF", "ID", "EX", "MEM", "WB"]
+
+        style = ttk.Style()
+
+        style.configure("IF.Treeview.Heading", foreground="#1a6bb5")
+        style.configure("ID.Treeview.Heading", foreground="#6f42c1")
+        style.configure("EX.Treeview.Heading", foreground="#c97a00")
+        style.configure("MEM.Treeview.Heading", foreground="#b8860b")
+        style.configure("WB.Treeview.Heading", foreground="#2a7a3b")
+
+        for col in columnas:
+
+            tabla.heading(col, text=col)
+
+            tabla.column(col, width=110, anchor="center")
+
+        tabla.heading("IF", text="IF (azul)")
+        tabla.heading("ID", text="ID (morado)")
+        tabla.heading("EX", text="EX (naranja)")
+        tabla.heading("MEM", text="MEM (amarillo)")
+        tabla.heading("WB", text="WB (verde)")
+
+        #tabla.grid(row=0, column=0, sticky="ew")
+
+        tabla.insert("", "end", iid="estado", values=("", "", "", "", "", "", "", ""))
+
+        return tabla
+
+    def frame_resultados(self, parent):
+        frame = ttk.LabelFrame(parent, text="Resultados", padding=5)
+        frame.grid(row=2, column=0, sticky="ew", pady=5)
+
+        tabla = ttk.Treeview(
+            frame,
+            columns=("ejec", "c1", "cpi1", "t1", "c2", "cpi2", "t2"),
+            show="headings",
+            height=5
+        )
+
+        headers = {
+            "ejec": "Ejecución",
+            "c1": "Ciclos P1",
+            "cpi1": "CPI P1",
+            "t1": "Tiempo P1",
+            "c2": "Ciclos P2",
+            "cpi2": "CPI P2",
+            "t2": "Tiempo P2",
+        }
+
+        for col, txt in headers.items():
+            tabla.heading(col, text=txt)
+            tabla.column(col, width=120, anchor="center")
+
+        tabla.pack(fill="x")
+
+        self.tabla_resultados = tabla
+
+    def obtener_procesadores_seleccionados(self):
+        return [op for op, var in self.cpu_vars.items() if var.get()]
+
+
+    def crear_manager(self):
+        seleccionados = self.obtener_procesadores_seleccionados()
+
+        if len(seleccionados) != 2:
+            messagebox.showwarning(
+                "Selección inválida",
+                "Debe seleccionar exactamente 2 procesadores."
+            )
+            return False
+
+        codigo = self.consola.get("1.0", "end").strip()
+
+        if not codigo:
+            messagebox.showwarning(
+                "Código vacío",
+                "Debe escribir o cargar instrucciones RISC-V en la consola."
+            )
+            return False
+
+        machine_code = MiniAssembler.assemble_program(codigo)
+
+        if not machine_code or all(x == 0 for x in machine_code):
+            messagebox.showerror(
+                "Error",
+                "No se pudo ensamblar el programa."
+            )
+            return False
+
+        self.manager = SimulationManager(
+            self.proc_map[seleccionados[0]],
+            self.proc_map[seleccionados[1]]
+        )
+
+        self.manager.load_assembly(machine_code)
+        self.actualizar_datapaths()
+        self.actualizar_gui()
+
+        return True
+
+
+    def run(self):
+
+        modo = self.modo_var.get()
+
+        if self.manager is None or self.manager.is_finished():
+            if not self.crear_manager():
+                return
+
+        if modo == "Paso a Paso":
+            self.step()
+
+        elif modo == "Automática":
+
+            # Si está corriendo -> pausa
+            if self.en_ejecucion and not self.en_pausa:
+
+                self.en_pausa = True
+                self.btn_run.config(text="CONTINUE")
+
+                if self.after_id:
+                    self.after_cancel(self.after_id)
+
+                return
+
+            # Si está pausado -> continuar
+            if self.en_pausa:
+
+                self.en_pausa = False
+                self.btn_run.config(text="STOP")
+
+                self.run_automatico()
+                return
+
+            # Inicio normal
+            self.en_ejecucion = True
+            self.en_pausa = False
+
+            self.btn_run.config(text="STOP")
+
+            self.run_automatico()
+
+        elif modo == "Completa":
+            self.run_completo()
+
+
+    def step(self):
+        if not self.manager:
+            return
+
+        if self.manager.is_finished():
+            self.registrar_ejecucion()
+            return
+
+        self.manager.step()
+        self.actualizar_gui()
+
+        if self.manager.is_finished():
+            self.registrar_ejecucion()
+
+
+    def run_automatico(self):
+
+        if not self.manager:
+            return
+
+        if self.en_pausa:
+            return
+
+        if self.manager.is_finished():
+
+            self.registrar_ejecucion()
+
+            self.en_ejecucion = False
+            self.en_pausa = False
+
+            self.btn_run.config(text="RUN")
+
+            return
+
+        self.manager.step()
+        self.actualizar_gui()
+
+        delay = int(self.delay_ms.get())
+
+        self.after_id = self.after(
+            delay,
+            self.run_automatico
+        )
+
+
+    def run_completo(self):
+        if not self.manager:
+            return
+
+        while not self.manager.is_finished():
+            self.manager.step()
+
+        self.actualizar_gui()
+        self.registrar_ejecucion()
+
+
+    def run_hazard(self):
+        if not self.manager:
+            return
+
+        while not self.manager.is_finished():
+            self.manager.step()
+            estado = self.manager.get_full_state()
+
+            p1 = estado["processor_1"]["pipeline_stages"]
+            p2 = estado["processor_2"]["pipeline_stages"]
+
+            if any(v == "burbuja" for v in p1.values()) or any(v == "burbuja" for v in p2.values()):
+                self.actualizar_gui()
+                return
+
+        self.actualizar_gui()
+        self.registrar_ejecucion()
+
+
+    def actualizar_gui(self):
+        if not self.manager:
+            return
+
+        estado = self.manager.get_full_state()
+
+        p1 = estado["processor_1"]
+        p2 = estado["processor_2"]
+
+        self.actualizar_tabla_pipeline(self.tabla_pipeline_p1, p1, self.proc1_tipo)
+        self.actualizar_tabla_pipeline(self.tabla_pipeline_p2, p2, self.proc2_tipo)
+
+        self.actualizar_tablas_laterales()
+        self.actualizar_datapaths()
+        self.actualizar_ventanas_mef()
+
+
+    def actualizar_tablas_laterales(self):
+        if not self.manager:
+            return
+
+        estado = self.manager.get_full_state()
+
+        proc_key = "processor_1" if self.procesador_actual.get() == "P1" else "processor_2"
+        mem_key = "processor_1" if self.memoria_actual.get() == "P1" else "processor_2"
+
+        proc_state = estado[proc_key]
+        mem_state = estado[mem_key]
+
+        # Registros
+        self.tabla_registros.delete(*self.tabla_registros.get_children())
+
+        for i, valor in enumerate(proc_state["registers"]):
+            self.tabla_registros.insert(
+                "",
+                "end",
+                values=(f"x{i}", valor)
+            )
+
+        # Memoria
+        self.tabla_memoria.delete(*self.tabla_memoria.get_children())
+
+        memoria = mem_state["memory_vector"]
+
+        for direccion, valor in memoria.items():
+            self.tabla_memoria.insert(
+                "",
+                "end",
+                text=direccion,
+                values=(valor,)
+            )
+
+    def actualizar_tabla_pipeline(self, tabla, estado_proc, tipo):
+
+        stages = estado_proc["pipeline_stages"]
+
+        if tipo in ("Segmentado (Stalls)", "Segmentado (Forwarding)"):
+
+            tabla["columns"] = ("PC", "CICLO", "TIEMPO", "IF", "ID", "EX", "MEM", "WB")
+
+            headers = {
+                "PC": "PC",
+                "CICLO": "CICLO",
+                "TIEMPO": "TIEMPO",
+                "IF": "IF (azul)",
+                "ID": "ID (morado)",
+                "EX": "EX (naranja)",
+                "MEM": "MEM (amarillo)",
+                "WB": "WB (verde)",
+            }
+
+            valores = (
+                estado_proc["pc"],
+                estado_proc["cycle"],
+                estado_proc["elapsed_time_ms"],
+                stages.get("IF", "—"),
+                stages.get("ID", "—"),
+                stages.get("EX", "—"),
+                stages.get("MEM", "—"),
+                stages.get("WB", "—"),
+            )
+
+        elif tipo == "Multiciclo":
+
+            tabla["columns"] = ("PC", "CICLO", "TIEMPO", "INSTRUCCION", "ESTADO")
+
+            headers = {
+                "PC": "PC",
+                "CICLO": "CICLO",
+                "TIEMPO": "TIEMPO",
+                "INSTRUCCION": "INSTRUCCIÓN ACTUAL",
+                "ESTADO": "ESTADO MEF",
+            }
+
+            estado_mef = "—"
+            instruccion = "—"
+
+            for estado, instr in stages.items():
+                if instr not in ("", "—", None):
+                    estado_mef = estado
+                    instruccion = instr
+                    break
+
+            valores = (
+                estado_proc["pc"],
+                estado_proc["cycle"],
+                estado_proc["elapsed_time_ms"],
+                instruccion,
+                estado_mef,
+            )
+
+        else:  # Uniciclo
+
+            tabla["columns"] = ("PC", "CICLO", "TIEMPO", "INSTRUCCION")
+
+            headers = {
+                "PC": "PC",
+                "CICLO": "CICLO",
+                "TIEMPO": "TIEMPO",
+                "INSTRUCCION": "INSTRUCCIÓN ACTUAL",
+            }
+
+            instruccion = stages.get("IF", "—")
+
+            valores = (
+                estado_proc["pc"],
+                estado_proc["cycle"],
+                estado_proc["elapsed_time_ms"],
+                instruccion,
+            )
+
+        for col in tabla["columns"]:
+            tabla.heading(col, text=headers[col])
+            tabla.column(col, width=140, anchor="center")
+
+        tabla.item("estado", values=valores)
+
+    def registrar_ejecucion(self):
+        if not self.manager:
+            return
+
+        estado = self.manager.get_full_state()
+        p1 = estado["processor_1"]
+        p2 = estado["processor_2"]
+
+        fila = {
+            "p1_ciclos": p1["cycle"],
+            "p1_cpi": p1["cycle"] / p1["stats"]["instructions"] if p1["stats"]["instructions"] else 0,
+            "p1_tiempo": p1["elapsed_time_ms"],
+            "p2_ciclos": p2["cycle"],
+            "p2_cpi": p2["cycle"] / p2["stats"]["instructions"] if p2["stats"]["instructions"] else 0,
+            "p2_tiempo": p2["elapsed_time_ms"],
+        }
+
+        self.historial.append(fila)
+        self.historial = self.historial[-10:]
+
+        self.tabla_resultados.delete(*self.tabla_resultados.get_children())
+
+        for i, h in enumerate(self.historial, start=1):
+            self.tabla_resultados.insert(
+                "",
+                "end",
+                values=(
+                    i,
+                    h["p1_ciclos"],
+                    f'{h["p1_cpi"]:.2f}',
+                    h["p1_tiempo"],
+                    h["p2_ciclos"],
+                    f'{h["p2_cpi"]:.2f}',
+                    h["p2_tiempo"],
+                )
+            )
+    
+    def reset_simulacion(self):
+
+        # Eliminar manager actual
+        self.manager = None
+
+        # Limpiar tablas pipeline
+        vacio = ("", "", "", "", "", "", "", "")
+
+        self.tabla_pipeline_p1.item("estado", values=vacio)
+        self.tabla_pipeline_p2.item("estado", values=vacio)
+
+        # Limpiar registros
+        for item in self.tabla_registros.get_children():
+            self.tabla_registros.delete(item)
+
+        # Limpiar memoria
+        for item in self.tabla_memoria.get_children():
+            self.tabla_memoria.delete(item)
+
+        # Limpiar datapaths
+        for widget in self.area_p1.winfo_children():
+            widget.destroy()
+
+        for widget in self.area_p2.winfo_children():
+            widget.destroy()
+        
+        for widget in self.ventanas_mef.values():
+            if widget.winfo_exists():
+                widget.destroy()
+        
+        # Deseleccionar procesadores
+        for var in self.cpu_vars.values():
+            var.set(False)
+
+        self.proc1_tipo = None
+        self.proc2_tipo = None
+
+        self.actualizar_titulos_procesadores()
+        self.actualizar_selector_mef()
+
+        # Reiniciar flags
+        self._execution_recorded = False
+        self.ventanas_mef.clear()
+        self.frames_mef.clear()
+
+        self.en_ejecucion = False
+        self.en_pausa = False
+
+        self.btn_run.config(text="RUN")
+
+        if self.after_id:
+            self.after_cancel(self.after_id)
+
+        print("Simulación reiniciada")
+
+    def actualizar_titulos_procesadores(self):
+
+        nombre1 = "Sin seleccionar"
+        nombre2 = "Sin seleccionar"
+
+        if self.proc1_tipo:
+            nombre1 = self.proc1_tipo
+
+        if self.proc2_tipo:
+            nombre2 = self.proc2_tipo
+
+        self.frame_proc1.config(
+            text=f"Procesador 1 — {nombre1}"
+        )
+
+        self.frame_proc2.config(
+            text=f"Procesador 2 — {nombre2}"
+        )
+    
+    def color_por_etapa(self, etapa, stages):
+        valor = stages.get(etapa, "")
+
+        if valor == "burbuja":
+            return "#f8d7da"  # rojo claro
+
+        if valor and valor != "—":
+            colores = {
+                "IF": "#d9ecff",
+                "ID": "#e8ddff",
+                "EX": "#ffe0b2",
+                "MEM": "#fff3cd",
+                "WB": "#d4edda",
+            }
+            return colores.get(etapa, "#ffffff")
+
+        return "#ffffff"
+
+
+    def borde_por_etapa(self, etapa, stages):
+        valor = stages.get(etapa, "")
+
+        if valor == "burbuja":
+            return "#cc3333"
+
+        if valor and valor != "—":
+            bordes = {
+                "IF": "#1a6bb5",
+                "ID": "#6f42c1",
+                "EX": "#c97a00",
+                "MEM": "#b8860b",
+                "WB": "#2a7a3b",
+            }
+            return bordes.get(etapa, "#000000")
+
+        return "#000000"
+    
+    def abrir_ventana_mef(self, numero_proc):
+
+        if numero_proc in self.ventanas_mef and self.ventanas_mef[numero_proc].winfo_exists():
+            self.ventanas_mef[numero_proc].lift()
+            self.actualizar_ventanas_mef()
+            return
+
+        ventana = tk.Toplevel(self)
+        ventana.title(f"MEF Multiciclo - Procesador {numero_proc}")
+        ventana.geometry("1000x700")
+
+        contenedor = ttk.Frame(ventana, padding=10)
+        contenedor.pack(fill="both", expand=True)
+
+        self.ventanas_mef[numero_proc] = ventana
+        self.frames_mef[numero_proc] = contenedor
+
+        ventana.protocol(
+            "WM_DELETE_WINDOW",
+            lambda n=numero_proc: self.cerrar_ventana_mef(n)
+        )
+
+        self.actualizar_ventanas_mef()
+
+    def actualizar_selector_mef(self):
+
+        for widget in self.barra_vista_p1.winfo_children():
+            widget.destroy()
+
+        if self.proc1_tipo == "Multiciclo":
+            ttk.Button(
+                self.barra_vista_p1,
+                text="Ver MEF",
+                command=lambda: self.abrir_ventana_mef(1)
+            ).pack(side="left", padx=4)
+
+        for widget in self.barra_vista_p2.winfo_children():
+            widget.destroy()
+
+        if self.proc2_tipo == "Multiciclo":
+            ttk.Button(
+                self.barra_vista_p2,
+                text="Ver MEF",
+                command=lambda: self.abrir_ventana_mef(2)
+            ).pack(side="left", padx=4)
+
+    def cerrar_ventana_mef(self, numero_proc):
+        if numero_proc in self.ventanas_mef:
+            self.ventanas_mef[numero_proc].destroy()
+
+        self.ventanas_mef.pop(numero_proc, None)
+        self.frames_mef.pop(numero_proc, None)
+
+
+    def actualizar_ventanas_mef(self):
+        if not self.manager:
+            return
+
+        estado = self.manager.get_full_state()
+
+        for numero_proc, frame in list(self.frames_mef.items()):
+
+            if numero_proc not in self.ventanas_mef:
+                continue
+
+            if not self.ventanas_mef[numero_proc].winfo_exists():
+                self.frames_mef.pop(numero_proc, None)
+                continue
+
+            for widget in frame.winfo_children():
+                widget.destroy()
+
+            estado_proc = estado["processor_1"] if numero_proc == 1 else estado["processor_2"]
+
+            mef = self.dibujar_mef_multiciclo(frame, estado_proc)
+            mef.pack(fill="both", expand=True)
