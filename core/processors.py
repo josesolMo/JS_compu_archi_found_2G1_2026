@@ -85,82 +85,122 @@ class Unicycle(ProcessorBase):
 class Multicycle(ProcessorBase):
     name = "Multiciclo"
     cycle_time_ps = 410
-    STATES = ["IF", "ID", "EX", "MEM", "WB"]
+    
+    STATES = [
+        "S0: Fetch", "S1: Decode", "S2: MemAdr", "S3: MemRead", 
+        "S4: MemWB", "S5: MemWrite", "S6: ExecuteR", "S7: ALUWB", 
+        "S8: ExecuteI", "S9: JAL", "S10: BEQ"
+    ]
 
     def __init__(self):
         super().__init__()
-        self._state:   str = "IF"
+        self._state:   str = "S0: Fetch"
         self._instr:   Optional[DecodedInstr] = None
+        self._old_pc:  int = 0  
+        self._branch_target: int = 0 # Guarda el cálculo anticipado del salto
         self._rs1_val: int = 0
         self._rs2_val: int = 0
         self._alu_out: int = 0
+        self._data:    int = 0  
 
     def reset(self):
         super().reset()
-        self._state   = "IF"
+        self._state   = "S0: Fetch"
         self._instr   = None
+        self._old_pc  = 0
+        self._branch_target = 0
         self._rs1_val = 0
         self._rs2_val = 0
         self._alu_out = 0
+        self._data    = 0
 
     def step(self):
         if self.halted: return
         self.stats.cycles += 1
 
-        if self._state == "IF":
+        if self._state == "S0: Fetch":
             word = self.mem_read_word(self.pc)
             if word == 0:
                 self.halted = True
                 return
             self._instr = DecodedInstr.decode(word)
-            self.pipeline_state["IF"] = self._instr
-            self._state = "ID"
+            self._old_pc = self.pc
+            self.pc = (self.pc + 4) & 0xFFFF_FFFF  
+            self._state = "S1: Decode"
 
-        elif self._state == "ID":
+        elif self._state == "S1: Decode":
             self._rs1_val = self.reg_read(self._instr.rs1)
             self._rs2_val = self.reg_read(self._instr.rs2)
-            self.pipeline_state["ID"] = self._instr
-            self._state = "EX"
-
-        elif self._state == "EX":
-            op = self._instr.opcode
-            if op in (OP_JAL, OP_JALR):
-                self._alu_out = (self.pc + 4) & 0xFFFF_FFFF
-            elif op in (OP_LOAD, OP_STORE):
-                self._alu_out = (self._rs1_val + self._instr.imm) & 0xFFFF_FFFF
-            elif op == OP_IMM:
-                self._alu_out = (self._rs1_val + self._instr.imm) & 0xFFFF_FFFF
-            elif op == OP_REG:
-                self._alu_out = self.alu_op(self._instr.funct3, self._instr.funct7, self._rs1_val, self._rs2_val)
             
-            self.pipeline_state["EX"] = self._instr
-            self._state = "MEM" if op in (OP_LOAD, OP_STORE) else "WB"
-
-        elif self._state == "MEM":
-            if self._instr.opcode == OP_LOAD:
-                self._alu_out = self.mem_read_word(self._alu_out)
-            elif self._instr.opcode == OP_STORE:
-                self.mem_write_word(self._alu_out, self._rs2_val)
-            self.pipeline_state["MEM"] = self._instr
-            self._state = "WB"
-
-        elif self._state == "WB":
+            # Cálculo anticipado de la dirección de salto
+            self._branch_target = (self._old_pc + self._instr.imm) & 0xFFFF_FFFF
+            
             op = self._instr.opcode
-            if op in (OP_LOAD, OP_IMM, OP_REG, OP_JAL, OP_JALR):
-                self.reg_write(self._instr.rd, self._alu_out)
-
-            if op == OP_JAL:
-                self.pc = (self.pc + self._instr.imm) & 0xFFFF_FFFF
-            elif op == OP_JALR:
-                self.pc = (self._rs1_val + self._instr.imm) & ~1 & 0xFFFF_FFFF
-            elif op == OP_BRANCH and self._instr.funct3 == F3_BEQ and self._rs1_val == self._rs2_val:
-                self.pc = (self.pc + self._instr.imm) & 0xFFFF_FFFF
+            # Bifurcación de la FSM
+            if op in (OP_LOAD, OP_STORE):
+                self._state = "S2: MemAdr"
+            elif op == OP_REG:
+                self._state = "S6: ExecuteR"
+            elif op == OP_IMM:
+                self._state = "S8: ExecuteI"
+            elif op in (OP_JAL, OP_JALR):
+                self._state = "S9: JAL"
+            elif op == OP_BRANCH:
+                self._state = "S10: BEQ"
             else:
-                self.pc = (self.pc + 4) & 0xFFFF_FFFF
+                self.halted = True
 
-            self.pipeline_state["WB"] = self._instr
+        elif self._state == "S2: MemAdr":
+            self._alu_out = (self._rs1_val + self._instr.imm) & 0xFFFF_FFFF
+            if self._instr.opcode == OP_LOAD:
+                self._state = "S3: MemRead"
+            else:
+                self._state = "S5: MemWrite"
+
+        elif self._state == "S3: MemRead":
+            self._data = self.mem_read_word(self._alu_out)
+            self._state = "S4: MemWB"
+
+        elif self._state == "S4: MemWB":
+            self.reg_write(self._instr.rd, self._data)
             self.stats.instructions += 1
-            self._state = "IF"
+            self._state = "S0: Fetch"
+
+        elif self._state == "S5: MemWrite":
+            self.mem_write_word(self._alu_out, self._rs2_val)
+            self.stats.instructions += 1
+            self._state = "S0: Fetch"
+
+        elif self._state == "S6: ExecuteR":
+            self._alu_out = self.alu_op(self._instr.funct3, self._instr.funct7, self._rs1_val, self._rs2_val)
+            self._state = "S7: ALUWB"
+
+        elif self._state == "S8: ExecuteI":
+            self._alu_out = (self._rs1_val + self._instr.imm) & 0xFFFF_FFFF
+            self._state = "S7: ALUWB"
+
+        elif self._state == "S9: JAL":
+            # Guardar dirección de retorno (OldPC + 4) en ALUOut para que S7 la escriba en el registro
+            self._alu_out = (self._old_pc + 4) & 0xFFFF_FFFF
+            
+            # Actualizar PC (PCUpdate)
+            if self._instr.opcode == OP_JAL:
+                self.pc = self._branch_target  
+            elif self._instr.opcode == OP_JALR:
+                self.pc = (self._rs1_val + self._instr.imm) & ~1 & 0xFFFF_FFFF
+                
+            self._state = "S7: ALUWB"
+
+        elif self._state == "S7: ALUWB":
+            self.reg_write(self._instr.rd, self._alu_out)
+            self.stats.instructions += 1
+            self._state = "S0: Fetch"
+
+        elif self._state == "S10: BEQ":
+            if self._instr.funct3 == F3_BEQ and self._rs1_val == self._rs2_val:
+                self.pc = self._branch_target
+            self.stats.instructions += 1
+            self._state = "S0: Fetch"
 
     def get_stage_labels(self) -> dict[str, str]:
         cur = self._instr

@@ -26,7 +26,7 @@ def main():
     machine_code = MiniAssembler.assemble_program(codigo_asm)
     
     # Inicializar el Gestor (El usuario puede elegir qué procesadores comparar)
-    manager = SimulationManager(Unicycle, PipelinedForwarding)
+    manager = SimulationManager(Multicycle, PipelinedForwarding)
     manager.load_assembly(machine_code)
     
     print("Iniciando Simulación...\n")
