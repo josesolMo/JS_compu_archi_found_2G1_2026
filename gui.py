@@ -23,6 +23,8 @@ class SimuladorGUI(tk.Tk):
         self.vista_p2 = tk.StringVar(value="Datapath")
         self.ventanas_mef = {}
         self.frames_mef = {}
+        self.en_ejecucion = False
+        self.en_pausa = False
 
         self.proc_map = {
             "Uniciclo": Unicycle,
@@ -71,13 +73,24 @@ class SimuladorGUI(tk.Tk):
         self.combo_modo = ttk.Combobox(
             frame,
             textvariable=self.modo_var,
-            values=["Paso a Paso", "Automática", "Completa", "Detectar Hazard"],
+            values=["Paso a Paso", "Automática", "Completa"],
             width=18,
             state="readonly"
         )
+
         self.combo_modo.grid(row=0, column=0, padx=4)
 
-        self.btn_run = ttk.Button(frame, text="RUN", command=self.run)
+        self.combo_modo.bind(
+            "<<ComboboxSelected>>",
+            lambda e: self.actualizar_estado_delay()
+        )
+
+        self.btn_run = ttk.Button(
+            frame,
+            text="RUN",
+            command=self.run
+        )
+
         self.btn_run.grid(row=0, column=1, padx=4)
 
         self.btn_reset = ttk.Button(
@@ -85,11 +98,12 @@ class SimuladorGUI(tk.Tk):
             text="RESET",
             command=self.reset_simulacion
         )
+
         self.btn_reset.grid(row=1, column=1, padx=4, pady=4)
 
         self.delay_ms = tk.IntVar(value=1)
 
-        spin = ttk.Spinbox(
+        self.spin_delay = ttk.Spinbox(
             frame,
             from_=1,
             to=1000,
@@ -98,24 +112,51 @@ class SimuladorGUI(tk.Tk):
             width=8
         )
 
-        spin.grid(row=1, column=0, pady=6, padx=10, sticky="w")
+        self.spin_delay.grid(
+            row=1,
+            column=0,
+            pady=6,
+            padx=10,
+            sticky="w"
+        )
 
-        ttk.Label(frame, text="ms").grid(row=1, column=0, padx=(80, 0), sticky="w")
+        ttk.Label(
+            frame,
+            text="ms"
+        ).grid(row=1, column=0, padx=(80, 0), sticky="w")
+
+        self.actualizar_estado_delay()
+
+    def actualizar_estado_delay(self):
+
+        modo = self.modo_var.get()
+
+        if modo == "Automática":
+            self.spin_delay.config(state="normal")
+        else:
+            self.spin_delay.config(state="disabled")
 
     def panel_consola(self, parent):
         frame = ttk.LabelFrame(parent, text="Consola", padding=8)
         frame.pack(fill="x", pady=5)
 
-        self.consola = tk.Text(frame, width=28, height=7)
+        self.consola = tk.Text(frame, width=28, height=9)
         self.consola.pack(fill="both")
+
         text = self.consola
 
-        text.insert("end", "ADDI x1, x0, 5\n")
-        text.insert("end", "ADD x2, x1, x3\n")
-        text.insert("end", "LW x4, 0(x2)\n")
-        text.insert("end", "ADD x5, x4, x1\n")
-        text.insert("end", "SW x5, 4(x2)\n")
-        text.insert("end", "BEQ x1, x2, -2\n")
+        text.insert("end", "ADDI x1, x0, 10\n")
+        text.insert("end", "ADDI x2, x0, 4\n")
+        text.insert("end", "\n")
+        text.insert("end", "ADD x3, x1, x2\n")
+        text.insert("end", "ADD x4, x3, x1\n")
+        text.insert("end", "\n")
+        text.insert("end", "SW x4, 0(x0)\n")
+        text.insert("end", "LW x5, 0(x0)\n")
+        text.insert("end", "\n")
+        text.insert("end", "ADD x6, x5, x2\n")
+        text.insert("end", "ADD x7, x6, x1\n")
+        text.insert("end", "ADD x8, x7, x6\n")
 
     def panel_procesadores(self, parent):
 
@@ -517,12 +558,78 @@ class SimuladorGUI(tk.Tk):
         stages = estado_proc["pipeline_stages"] if estado_proc else {}
         canvas = tk.Canvas(frame, bg="white", height=210)
 
+        estado_activo = None
+        for estado in [
+            "S0: Fetch", "S1: Decode", "S2: MemAdr", "S3: MemRead",
+            "S4: MemWB", "S5: MemWrite", "S6: ExecuteR", "S7: ALUWB",
+            "S8: ExecuteI", "S9: JAL", "S10: BEQ"
+        ]:
+            if stages.get(estado, "—") not in ("", "—", None):
+                estado_activo = estado
+                break
+
+        modulos_por_estado = {
+            "S0: Fetch": {
+                "PC", "MUX\nPC", "Unified\nMemory", "IR",
+                "MUX\nSrcA", "MUX\nSrcB", "ALU", "MUX\nResult", "Control Unit"
+            },
+
+            "S1: Decode": {
+                "IR", "Register\nFile", "Sign\nExtend",
+                "Reg A", "Reg B", "Control Unit"
+            },
+
+            "S2: MemAdr": {
+                "Reg A", "Sign\nExtend", "MUX\nSrcA",
+                "MUX\nSrcB", "ALU", "ALU\nOut", "Control Unit"
+            },
+
+            "S3: MemRead": {
+                "ALU\nOut", "Unified\nMemory", "MDR", "Control Unit"
+            },
+
+            "S4: MemWB": {
+                "MDR", "MUX\nResult", "Register\nFile", "Control Unit"
+            },
+
+            "S5: MemWrite": {
+                "Reg B", "ALU\nOut", "Unified\nMemory", "Control Unit"
+            },
+
+            "S6: ExecuteR": {
+                "Reg A", "Reg B", "MUX\nSrcA",
+                "MUX\nSrcB", "ALU", "ALU\nOut", "Control Unit"
+            },
+
+            "S7: ALUWB": {
+                "ALU\nOut", "MUX\nResult", "Register\nFile", "Control Unit"
+            },
+
+            "S8: ExecuteI": {
+                "Reg A", "Sign\nExtend", "MUX\nSrcA",
+                "MUX\nSrcB", "ALU", "ALU\nOut", "Control Unit"
+            },
+
+            "S9: JAL": {
+                "PC", "MUX\nPC", "MUX\nResult",
+                "ALU\nOut", "Control Unit"
+            },
+
+            "S10: BEQ": {
+                "PC", "MUX\nPC", "Reg A", "Reg B",
+                "MUX\nSrcA", "MUX\nSrcB", "ALU",
+                "MUX\nResult", "Control Unit"
+            },
+        }
+
+        modulos_activos = modulos_por_estado.get(estado_activo, set())
+
         def bloque(x1, y1, x2, y2, texto, etapa=None):
-            activo = etapa and stages.get(etapa) not in ("", "—", None)
+            activo = texto in modulos_activos
 
             if activo:
-                fill = "#fff3cd"     
-                outline = "#c97a00"  
+                fill = "#fff3cd"
+                outline = "#c97a00"
                 width = 3
             else:
                 fill = "white"
@@ -1150,6 +1257,7 @@ class SimuladorGUI(tk.Tk):
 
 
     def run(self):
+
         modo = self.modo_var.get()
 
         if self.manager is None or self.manager.is_finished():
@@ -1160,13 +1268,37 @@ class SimuladorGUI(tk.Tk):
             self.step()
 
         elif modo == "Automática":
+
+            # Si está corriendo -> pausa
+            if self.en_ejecucion and not self.en_pausa:
+
+                self.en_pausa = True
+                self.btn_run.config(text="CONTINUE")
+
+                if self.after_id:
+                    self.after_cancel(self.after_id)
+
+                return
+
+            # Si está pausado -> continuar
+            if self.en_pausa:
+
+                self.en_pausa = False
+                self.btn_run.config(text="STOP")
+
+                self.run_automatico()
+                return
+
+            # Inicio normal
+            self.en_ejecucion = True
+            self.en_pausa = False
+
+            self.btn_run.config(text="STOP")
+
             self.run_automatico()
 
         elif modo == "Completa":
             self.run_completo()
-
-        elif modo == "Detectar Hazard":
-            self.run_hazard()
 
 
     def step(self):
@@ -1185,18 +1317,33 @@ class SimuladorGUI(tk.Tk):
 
 
     def run_automatico(self):
+
         if not self.manager:
             return
 
+        if self.en_pausa:
+            return
+
         if self.manager.is_finished():
+
             self.registrar_ejecucion()
+
+            self.en_ejecucion = False
+            self.en_pausa = False
+
+            self.btn_run.config(text="RUN")
+
             return
 
         self.manager.step()
         self.actualizar_gui()
 
         delay = int(self.delay_ms.get())
-        self.after_id = self.after(delay, self.run_automatico)
+
+        self.after_id = self.after(
+            delay,
+            self.run_automatico
+        )
 
 
     def run_completo(self):
@@ -1285,12 +1432,21 @@ class SimuladorGUI(tk.Tk):
 
         stages = estado_proc["pipeline_stages"]
 
-        es_pipeline = tipo in (
-            "Segmentado (Stalls)",
-            "Segmentado (Forwarding)"
-        )
+        if tipo in ("Segmentado (Stalls)", "Segmentado (Forwarding)"):
 
-        if es_pipeline:
+            tabla["columns"] = ("PC", "CICLO", "TIEMPO", "IF", "ID", "EX", "MEM", "WB")
+
+            headers = {
+                "PC": "PC",
+                "CICLO": "CICLO",
+                "TIEMPO": "TIEMPO",
+                "IF": "IF (azul)",
+                "ID": "ID (morado)",
+                "EX": "EX (naranja)",
+                "MEM": "MEM (amarillo)",
+                "WB": "WB (verde)",
+            }
+
             valores = (
                 estado_proc["pc"],
                 estado_proc["cycle"],
@@ -1301,17 +1457,59 @@ class SimuladorGUI(tk.Tk):
                 stages.get("MEM", "—"),
                 stages.get("WB", "—"),
             )
-        else:
+
+        elif tipo == "Multiciclo":
+
+            tabla["columns"] = ("PC", "CICLO", "TIEMPO", "INSTRUCCION", "ESTADO")
+
+            headers = {
+                "PC": "PC",
+                "CICLO": "CICLO",
+                "TIEMPO": "TIEMPO",
+                "INSTRUCCION": "INSTRUCCIÓN ACTUAL",
+                "ESTADO": "ESTADO MEF",
+            }
+
+            estado_mef = "—"
+            instruccion = "—"
+
+            for estado, instr in stages.items():
+                if instr not in ("", "—", None):
+                    estado_mef = estado
+                    instruccion = instr
+                    break
+
             valores = (
                 estado_proc["pc"],
                 estado_proc["cycle"],
                 estado_proc["elapsed_time_ms"],
-                "—",
-                "—",
-                "—",
-                "—",
-                "—",
+                instruccion,
+                estado_mef,
             )
+
+        else:  # Uniciclo
+
+            tabla["columns"] = ("PC", "CICLO", "TIEMPO", "INSTRUCCION")
+
+            headers = {
+                "PC": "PC",
+                "CICLO": "CICLO",
+                "TIEMPO": "TIEMPO",
+                "INSTRUCCION": "INSTRUCCIÓN ACTUAL",
+            }
+
+            instruccion = stages.get("IF", "—")
+
+            valores = (
+                estado_proc["pc"],
+                estado_proc["cycle"],
+                estado_proc["elapsed_time_ms"],
+                instruccion,
+            )
+
+        for col in tabla["columns"]:
+            tabla.heading(col, text=headers[col])
+            tabla.column(col, width=140, anchor="center")
 
         tabla.item("estado", values=valores)
 
@@ -1396,6 +1594,14 @@ class SimuladorGUI(tk.Tk):
         self._execution_recorded = False
         self.ventanas_mef.clear()
         self.frames_mef.clear()
+
+        self.en_ejecucion = False
+        self.en_pausa = False
+
+        self.btn_run.config(text="RUN")
+
+        if self.after_id:
+            self.after_cancel(self.after_id)
 
         print("Simulación reiniciada")
 
