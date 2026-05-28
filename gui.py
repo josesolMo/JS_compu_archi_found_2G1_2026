@@ -639,7 +639,9 @@ class SimuladorGUI(tk.Tk):
         stages = estado_proc["pipeline_stages"] if estado_proc else {}
 
         estado_activo = None
-        for estado in ["IF", "ID", "EX", "MEM", "WB"]:
+        for estado in ["S0: Fetch", "S1: Decode", "S2: MemAdr", "S3: MemRead", 
+        "S4: MemWB", "S5: MemWrite", "S6: ExecuteR", "S7: ALUWB", 
+        "S8: ExecuteI", "S9: JAL", "S10: BEQ"]:
             if stages.get(estado, "—") not in ("", "—", None):
                 estado_activo = estado
                 break
@@ -670,11 +672,17 @@ class SimuladorGUI(tk.Tk):
         canvas.configure(scrollregion=(0, 0, 950, 760))
 
         activos_visuales = {
-            "IF": ["S0"],
-            "ID": ["S1"],
-            "EX": ["S6", "S7", "S9"],
-            "MEM": ["S2", "S3", "S5"],
-            "WB": ["S4", "S8"],
+            "S0: Fetch": ["S0"],
+            "S1: Decode": ["S1"],
+            "S2: MemAdr": ["S2"],
+            "S3: MemRead": ["S3"],
+            "S4: MemWB": ["S4"],
+            "S5: MemWrite": ["S5"],
+            "S6: ExecuteR": ["S6"],
+            "S7: ALUWB": ["S7"],
+            "S8: ExecuteI": ["S8"],
+            "S9: JAL": ["S9"],
+            "S10: BEQ": ["S10"]
         }
 
         estados_activos = activos_visuales.get(estado_activo, [])
@@ -685,12 +693,13 @@ class SimuladorGUI(tk.Tk):
 
             "S2": (120, 250, "S2: MemAdr"),
             "S6": (330, 250, "S6: ExecuteR"),
-            "S7": (540, 250, "S7: ExecuteI"),
-            "S9": (760, 250, "S9: Branch"),
+            "S8": (520, 250, "S8: ExecuteI"),
+            "S9": (635, 250, "S9: JAL"),
+            "S10": (760, 250, "S10: BEQ"),
 
             "S3": (120, 430, "S3: MemRead"),
             "S5": (330, 430, "S5: MemWrite"),
-            "S8": (540, 430, "S8: ALUWB"),
+            "S7": (540, 430, "S7: ALUWB"),
 
             "S4": (120, 610, "S4: MemWB"),
         }
@@ -749,12 +758,14 @@ class SimuladorGUI(tk.Tk):
         flecha("S1", "S2", "Memory\nOp = 01")
         flecha("S2", "S3", "LDR")
         flecha("S2", "S4", "STR")
-        flecha("S3", "S5")
+        flecha("S2", "S5")
         flecha("S1", "S6", "Data Reg")
-        flecha("S1", "S7", "Data Imm")
-        flecha("S1", "S9", "Branch")
-        flecha("S6", "S8")
-        flecha("S7", "S8")
+        flecha("S1", "S8", "Data Imm")
+        flecha("S1", "S9", "JAL")
+        flecha("S9", "S7")
+        flecha("S1", "S10", "BEQ")
+        flecha("S6", "S7")
+        flecha("S8", "S7")
 
         # Retornos hacia Fetch
         y_retorno = 690
